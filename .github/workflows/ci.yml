@@ -1,0 +1,95 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Nothing here writes to the repository; checkout is the only thing that
+# needs the token at all.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install SwiftLint
+        run: command -v swiftlint || brew install swiftlint
+
+      - name: Lint
+        run: swiftlint lint --strict
+
+      # unused_declaration and unused_import need the compiler's view of the
+      # module, so they only run against a real build log.
+      - name: Dead code
+        run: |
+          swift build --build-tests -v > "$RUNNER_TEMP/build.log" 2>&1
+          swiftlint analyze --strict --compiler-log-path "$RUNNER_TEMP/build.log"
+
+  test:
+    name: Test
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Show toolchain
+        run: |
+          swift --version
+          xcodebuild -version
+
+      # Fails if Package.resolved is missing or stale, so a dependency can
+      # never be silently upgraded by a build. No-op while there are none.
+      - name: Verify the lockfile
+        run: swift build --only-use-versions-from-resolved-file
+
+      - name: Test (debug)
+        run: swift test
+
+      # Release mode is where the scanner's fast paths actually get built, and
+      # where the throughput tripwires mean anything.
+      - name: Test (release)
+        run: swift test -c release
+
+  app:
+    name: Build app
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build app bundle
+        run: Scripts/build-app.sh
+
+      - name: Package
+        run: Scripts/package.sh
+
+      - name: Check the bundle is well formed
+        run: |
+          set -euo pipefail
+          plutil -lint dist/PasteBop.app/Contents/Info.plist
+          codesign --verify --strict --verbose=2 dist/PasteBop.app
+          ARCHS="$(lipo -archs dist/PasteBop.app/Contents/MacOS/PasteBop)"
+          echo "architectures: $ARCHS"
+          [ "$ARCHS" = "arm64" ]
+          test -f dist/PasteBop.app/Contents/Resources/AppIcon.icns
+          test -f dist/PasteBop.app/Contents/Resources/Assets.car
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: PasteBop-${{ github.sha }}
+          path: dist/*.dmg
+          if-no-files-found: error

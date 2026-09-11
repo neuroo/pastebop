@@ -1,0 +1,12 @@
+.DS_Store
+.build/
+.swiftpm/
+build/
+dist/
+*.xcuserstate
+xcuserdata/
+DerivedData/
+
+# Claude Code: the skills and CLAUDE.md in this repo are shared, local
+# machine state is not.
+.claude/settings.local.json

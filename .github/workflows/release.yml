@@ -1,0 +1,183 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "CalVer version to build, e.g. 2026.09.11"
+        required: true
+
+# Scoped to the job rather than the workflow, and read-only by default.
+permissions:
+  contents: read
+
+# Two runs of the same tag would race to create the same release.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build and publish
+    runs-on: macos-latest
+    permissions:
+      contents: write # create the release and its tag; nothing else is needed
+    env:
+      # Signing turns itself on the day these secrets exist. Until then the app
+      # is ad-hoc signed and users take the Gatekeeper detour documented in the
+      # README.
+      HAS_SIGNING_CERT: ${{ secrets.DEVELOPER_ID_P12 != '' }}
+      HAS_NOTARY: ${{ secrets.NOTARY_APPLE_ID != '' && secrets.NOTARY_TEAM_ID != '' && secrets.NOTARY_PASSWORD != '' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # gh uses GH_TOKEN from the environment; git never needs the
+          # credential, so it is not left in .git/config for the build to find.
+          persist-credentials: false
+
+      - name: Resolve version
+        id: version
+        # Through env rather than ${{ }} inside the script: the dispatch input
+        # is free text, and interpolating it would splice it into the shell.
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            VERSION="${INPUT_VERSION:-}"
+          else
+            VERSION="${GITHUB_REF_NAME#v}"
+          fi
+          source Scripts/version.sh
+          pastebop_parse_version "$VERSION"
+
+          # The tag is the source of truth, but a VERSION file that disagrees
+          # means someone forgot Scripts/bump-version.sh, and the About window
+          # would ship the wrong number.
+          FILE_VERSION="$(tr -d '[:space:]' < VERSION)"
+          if [[ "$FILE_VERSION" != "$VERSION" ]]; then
+            echo "::error::VERSION file says $FILE_VERSION but this release is $VERSION. Run Scripts/bump-version.sh and commit before tagging."
+            exit 1
+          fi
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "build=$BUILD_NUMBER" >> "$GITHUB_OUTPUT"
+
+      - name: Verify the lockfile
+        run: swift build --only-use-versions-from-resolved-file
+
+      - name: Test
+        run: swift test -c release
+
+      - name: Import signing certificate
+        if: env.HAS_SIGNING_CERT == 'true'
+        env:
+          CERTIFICATE: ${{ secrets.DEVELOPER_ID_P12 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.DEVELOPER_ID_P12_PASSWORD }}
+        run: |
+          set -euo pipefail
+          KEYCHAIN="$RUNNER_TEMP/signing.keychain-db"
+          PASSWORD="$(uuidgen)"
+          security create-keychain -p "$PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 900 "$KEYCHAIN"
+          security unlock-keychain -p "$PASSWORD" "$KEYCHAIN"
+          echo -n "$CERTIFICATE" | base64 --decode -o "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN" \
+            -P "$CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$PASSWORD" "$KEYCHAIN" > /dev/null
+          security list-keychain -d user -s "$KEYCHAIN" login.keychain-db
+          rm -f "$RUNNER_TEMP/cert.p12"
+          IDENTITY="$(security find-identity -v -p codesigning "$KEYCHAIN" \
+            | awk -F'"' '/Developer ID Application/ {print $2; exit}')"
+          test -n "$IDENTITY" || { echo "::error::no Developer ID Application identity in the imported certificate"; exit 1; }
+          echo "CODESIGN_IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
+
+      - name: Build app
+        env:
+          PASTEBOP_VERSION: ${{ steps.version.outputs.version }}
+        run: Scripts/build-app.sh
+
+      - name: Notarize and staple
+        if: env.HAS_SIGNING_CERT == 'true' && env.HAS_NOTARY == 'true'
+        env:
+          APPLE_ID: ${{ secrets.NOTARY_APPLE_ID }}
+          TEAM_ID: ${{ secrets.NOTARY_TEAM_ID }}
+          APP_PASSWORD: ${{ secrets.NOTARY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          # Notarisation takes a zip of the app, then the ticket is stapled to
+          # the .app itself so the .dmg built afterwards carries it.
+          ditto -c -k --sequesterRsrc --keepParent dist/PasteBop.app "$RUNNER_TEMP/notarize.zip"
+          xcrun notarytool submit "$RUNNER_TEMP/notarize.zip" \
+            --apple-id "$APPLE_ID" \
+            --team-id "$TEAM_ID" \
+            --password "$APP_PASSWORD" \
+            --wait
+          xcrun stapler staple dist/PasteBop.app
+          spctl --assess --type execute --verbose=2 dist/PasteBop.app
+
+      - name: Package
+        env:
+          PASTEBOP_VERSION: ${{ steps.version.outputs.version }}
+        run: Scripts/package.sh
+
+      # Once releases are immutable a bad asset cannot be replaced, only
+      # superseded. Everything worth checking is checked before publishing.
+      - name: Verify the artifacts
+        env:
+          PASTEBOP_VERSION: ${{ steps.version.outputs.version }}
+        run: Scripts/verify-release.sh
+
+      - name: Write release notes
+        id: notes
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          BUILD: ${{ steps.version.outputs.build }}
+        run: |
+          set -euo pipefail
+          {
+            echo "PasteBop $VERSION (build $BUILD) for Apple silicon, macOS 14 or later."
+            echo
+            if [[ "$HAS_SIGNING_CERT" == "true" && "$HAS_NOTARY" == "true" ]]; then
+              echo "Signed with a Developer ID and notarised by Apple."
+            else
+              echo "### First launch"
+              echo
+              echo "This build is ad-hoc signed, so Gatekeeper will refuse it the first time."
+              echo "Drag PasteBop to Applications, then either right-click it and choose **Open**,"
+              echo "or run:"
+              echo
+              echo '```bash'
+              echo 'xattr -dr com.apple.quarantine /Applications/PasteBop.app'
+              echo '```'
+            fi
+            echo
+            echo "### Checksums"
+            echo
+            echo '```'
+            ( cd dist && shasum -a 256 ./*.dmg ./*.zip )
+            echo '```'
+          } > "$RUNNER_TEMP/notes.md"
+          echo "path=$RUNNER_TEMP/notes.md" >> "$GITHUB_OUTPUT"
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+          NOTES: ${{ steps.notes.outputs.path }}
+        run: |
+          set -euo pipefail
+          # A tag push already has its tag; workflow_dispatch does not, and
+          # gh would then cut it from the default branch instead of the commit
+          # that was just built and verified. Immutable releases freeze the tag
+          # too, so it has to be right the first time. The API ignores
+          # --target when the tag exists, so this is safe on both paths.
+          gh release create "v$VERSION" \
+            --target "$GITHUB_SHA" \
+            --title "PasteBop $VERSION" \
+            --notes-file "$NOTES" \
+            dist/PasteBop-"$VERSION".dmg \
+            dist/PasteBop-"$VERSION".zip
