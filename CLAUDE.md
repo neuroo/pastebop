@@ -14,6 +14,7 @@ Scripts/package.sh                            # .dmg and .zip
 swift Scripts/make-icons.swift                # regenerate App/ assets from img/
 swift Scripts/make-dmg-background.swift      # regenerate the disk image background
 Scripts/make-dmg-layout.sh                   # regenerate the disk image window layout
+Scripts/make-demo.sh                         # regenerate the README demo gif
 PASTEBOP_BENCHMARK=1 swift test -c release --filter Throughput
 ```
 
@@ -100,6 +101,13 @@ be skipped blind). The scanner has two loop shapes and picks by that flag
 
 Single-scalar rules below `U+00A0` are refused by the parser, not ignored by
 the scanner: accepting a rule that can never fire is a silent lie.
+
+## The demo gif
+
+`Scripts/make-demo.sh` renders `img/demo.gif`. The before and after text, which
+characters are boxed, and the menu lines all come from the real table and a
+real `ActivityReport`, so the demo cannot claim something the app does not do.
+Re-run it whenever the menu wording or the table changes.
 
 ## Provenance
 

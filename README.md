@@ -1,10 +1,13 @@
-<p align="center">
-  <img src="img/menu-bar/preview.png" alt="The PasteBop menu bar icon, light and dark" width="420">
-</p>
-
 <h1 align="center">PasteBop</h1>
 
-<p align="center"><em>Copied text, straightened out.</em></p>
+<p align="center">
+  <em>Copied text, straightened out &mdash; and an opinion about where it came from.</em>
+</p>
+
+<p align="center">
+  <img src="img/demo.gif" width="760"
+       alt="PasteBop replacing curly quotes, an em dash and an ellipsis on the clipboard, then reporting in the menu bar that the text reads machine-written">
+</p>
 
 PasteBop is a macOS menu bar app that watches the clipboard and rewrites
 typographic and invisible characters into the ones on your keyboard. Copy
