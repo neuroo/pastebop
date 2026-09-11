@@ -8,8 +8,8 @@
 //      Scripts/make-demo.sh
 //
 //  The before and after text, the characters highlighted, and the menu lines
-//  all come from the real table and the real ActivityReport, so the demo
-//  cannot drift from what the app does.
+//  all come from the real table and a real ActivityReport, so the demo cannot
+//  claim something the app does not do.
 //
 
 import AppKit
@@ -27,120 +27,171 @@ let sample = """
 
 let cleaned = TextNormalizer.normalized(sample)
 let tally = TextNormalizer.tally(sample)
-let provenance = Provenance(tally: tally, characterCount: 900)
+
 let report = ActivityReport(
     isEnabled: true,
     copyCount: 812,
     tally: tally,
     locale: Locale(identifier: "en_US"),
-    lastProvenance: provenance,
+    lastProvenance: Provenance(tally: tally, characterCount: 900),
     lastCopyCharacters: tally.characterCount,
     machineWrittenCopies: 512
 )
 
-// MARK: - Canvas
+// MARK: - Style
 
 enum Style {
     static let width = 880.0
     static let height = 344.0
     static let scale = 2.0
+    static let menuBarHeight = 28.0
 
     static let backdrop = CGColor(red: 0.957, green: 0.957, blue: 0.969, alpha: 1)
     static let menuBar = CGColor(red: 0.12, green: 0.12, blue: 0.15, alpha: 1)
     static let card = CGColor(red: 1, green: 1, blue: 1, alpha: 1)
+    static let popover = CGColor(red: 0.99, green: 0.99, blue: 1, alpha: 1)
     static let ink = CGColor(red: 0.11, green: 0.11, blue: 0.13, alpha: 1)
     static let faint = CGColor(red: 0.55, green: 0.55, blue: 0.60, alpha: 1)
-    static let before = CGColor(red: 0.98, green: 0.72, blue: 0.25, alpha: 0.42)
-    static let after = CGColor(red: 0.42, green: 0.78, blue: 0.50, alpha: 0.40)
+    static let beforeMark = CGColor(red: 0.98, green: 0.72, blue: 0.25, alpha: 0.42)
+    static let afterMark = CGColor(red: 0.42, green: 0.78, blue: 0.50, alpha: 0.40)
     static let accent = CGColor(red: 0.47, green: 0.42, blue: 0.78, alpha: 1)
 
     static let mono = NSFont.monospacedSystemFont(ofSize: 20, weight: .medium)
+    static let caption = NSFont.systemFont(ofSize: 14, weight: .regular)
     static let label = NSFont.systemFont(ofSize: 13, weight: .semibold)
-    static let menuFont = NSFont.systemFont(ofSize: 13, weight: .regular)
+    static let menuItem = NSFont.systemFont(ofSize: 13, weight: .regular)
+    static let clock = NSFont.systemFont(ofSize: 12, weight: .regular)
 }
-
-/// The shipped template glyph, tinted for the menu bar.
-let menuGlyph: CGImage = {
-    let url = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-        .appending(path: "img/menu-bar/PasteBopTemplate.imageset/PasteBopTemplate@2x.png")
-    guard let data = try? Data(contentsOf: url),
-          let source = CGImageSourceCreateWithData(data as CFData, nil),
-          let image = CGImageSourceCreateImageAtIndex(source, 0, nil)
-    else { fatalError("missing the menu bar glyph at \(url.path)") }
-    return image
-}()
 
 func fail(_ message: String) -> Never {
     FileHandle.standardError.write(Data("error: \(message)\n".utf8))
     exit(1)
 }
 
-func newContext() -> CGContext {
-    guard let context = CGContext(
-        data: nil,
-        width: Int(Style.width * Style.scale),
-        height: Int(Style.height * Style.scale),
-        bitsPerComponent: 8,
-        bytesPerRow: 0,
-        space: CGColorSpaceCreateDeviceRGB(),
-        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-    ) else { fail("cannot create the context") }
-    context.scaleBy(x: Style.scale, y: Style.scale)
-    context.interpolationQuality = .high
-    context.setAllowsAntialiasing(true)
-    return context
-}
+/// The shipped template glyph, drawn the way a real menu bar draws one.
+let menuGlyph: CGImage = {
+    let url = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        .appending(path: "img/menu-bar/PasteBopTemplate.imageset/PasteBopTemplate@2x.png")
+    guard let data = try? Data(contentsOf: url),
+          let source = CGImageSourceCreateWithData(data as CFData, nil),
+          let image = CGImageSourceCreateImageAtIndex(source, 0, nil)
+    else { fail("missing the menu bar glyph at \(url.path)") }
+    return image
+}()
 
-// MARK: - Text
+// MARK: - Drawing
 
-@discardableResult
-func draw(
-    _ text: String,
-    _ font: NSFont,
-    _ color: CGColor,
-    at point: CGPoint,
-    in context: CGContext
-) -> CTLine {
-    let attributed = NSAttributedString(string: text, attributes: [
-        .font: font,
-        .foregroundColor: NSColor(cgColor: color) ?? .black,
-    ])
-    let line = CTLineCreateWithAttributedString(attributed)
-    context.textPosition = point
-    CTLineDraw(line, context)
-    return line
-}
+struct Canvas {
+    let context: CGContext
 
-/// Boxes the runs of `text` that the table rewrites, so the eye lands on them.
-func highlight(
-    _ text: String,
-    changedRanges: [Range<String.Index>],
-    font: NSFont,
-    colour: CGColor,
-    at point: CGPoint,
-    in context: CGContext
-) {
-    let attributed = NSAttributedString(string: text, attributes: [.font: font])
-    let line = CTLineCreateWithAttributedString(attributed)
-    context.setFillColor(colour)
-    for range in changedRanges {
-        let lower = text.utf16.distance(from: text.utf16.startIndex, to: range.lowerBound.samePosition(in: text.utf16) ?? text.utf16.startIndex)
-        let upper = text.utf16.distance(from: text.utf16.startIndex, to: range.upperBound.samePosition(in: text.utf16) ?? text.utf16.startIndex)
-        let startX = CTLineGetOffsetForStringIndex(line, lower, nil)
-        let endX = CTLineGetOffsetForStringIndex(line, upper, nil)
-        let box = CGRect(
-            x: point.x + startX - 2,
-            y: point.y - 5,
-            width: max(6, endX - startX) + 4,
-            height: font.pointSize + 8
-        )
-        context.addPath(CGPath(roundedRect: box, cornerWidth: 4, cornerHeight: 4, transform: nil))
+    init() {
+        guard let context = CGContext(
+            data: nil,
+            width: Int(Style.width * Style.scale),
+            height: Int(Style.height * Style.scale),
+            bitsPerComponent: 8,
+            bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { fail("cannot create the context") }
+        context.scaleBy(x: Style.scale, y: Style.scale)
+        context.interpolationQuality = .high
+        self.context = context
+    }
+
+    func fill(_ rect: CGRect, _ color: CGColor) {
+        context.setFillColor(color)
+        context.fill(rect)
+    }
+
+    func rounded(_ rect: CGRect, radius: Double, _ color: CGColor, shadow: Bool = false) {
+        if shadow {
+            context.setShadow(
+                offset: CGSize(width: 0, height: -3),
+                blur: 12,
+                color: CGColor(gray: 0, alpha: 0.16)
+            )
+        }
+        context.setFillColor(color)
+        context.addPath(CGPath(
+            roundedRect: rect,
+            cornerWidth: radius,
+            cornerHeight: radius,
+            transform: nil
+        ))
         context.fillPath()
+        if shadow {
+            context.setShadow(offset: .zero, blur: 0, color: nil)
+        }
+    }
+
+    func text(_ string: String, font: NSFont, color: CGColor, at point: CGPoint) {
+        let attributed = NSAttributedString(string: string, attributes: [
+            .font: font,
+            .foregroundColor: NSColor(cgColor: color) ?? .black,
+        ])
+        context.textPosition = point
+        CTLineDraw(CTLineCreateWithAttributedString(attributed), context)
+    }
+
+    /// Boxes the given ranges of a monospaced line, so the eye lands on the
+    /// characters that change.
+    func highlight(
+        _ string: String,
+        ranges: [Range<String.Index>],
+        color: CGColor,
+        at point: CGPoint
+    ) {
+        guard !ranges.isEmpty else { return }
+        let attributed = NSAttributedString(string: string, attributes: [.font: Style.mono])
+        let line = CTLineCreateWithAttributedString(attributed)
+        context.setFillColor(color)
+        for range in ranges {
+            let lower = string.utf16Offset(of: range.lowerBound)
+            let upper = string.utf16Offset(of: range.upperBound)
+            let startX = CTLineGetOffsetForStringIndex(line, lower, nil)
+            let endX = CTLineGetOffsetForStringIndex(line, upper, nil)
+            let box = CGRect(
+                x: point.x + startX - 2,
+                y: point.y - 5,
+                width: max(6, endX - startX) + 4,
+                height: Style.mono.pointSize + 8
+            )
+            context.addPath(CGPath(
+                roundedRect: box,
+                cornerWidth: 4,
+                cornerHeight: 4,
+                transform: nil
+            ))
+            context.fillPath()
+        }
+    }
+
+    /// Fills the glyph through its own alpha, as a template image.
+    func glyph(_ image: CGImage, in box: CGRect, color: CGColor) {
+        context.saveGState()
+        context.clip(to: box, mask: image)
+        context.setFillColor(color)
+        context.fill(box)
+        context.restoreGState()
+    }
+
+    func image() -> CGImage {
+        guard let image = context.makeImage() else { fail("render failed") }
+        return image
     }
 }
 
-/// Which characters on a line the rules touch.
-func changedRanges(in line: String) -> [Range<String.Index>] {
+private extension String {
+    func utf16Offset(of index: String.Index) -> Int {
+        utf16.distance(from: utf16.startIndex, to: index.samePosition(in: utf16) ?? utf16.startIndex)
+    }
+}
+
+// MARK: - Which characters change
+
+/// The characters on a line that the rules touch.
+func markedInSource(_ line: String) -> [Range<String.Index>] {
     var ranges: [Range<String.Index>] = []
     var index = line.startIndex
     while index < line.endIndex {
@@ -153,81 +204,21 @@ func changedRanges(in line: String) -> [Range<String.Index>] {
     return ranges
 }
 
-// MARK: - Scene
-
-func card(_ context: CGContext, y: CGFloat, height: CGFloat) -> CGRect {
-    let rect = CGRect(x: 60, y: y, width: Style.width - 120, height: height)
-    context.setShadow(offset: CGSize(width: 0, height: -2), blur: 10,
-                      color: CGColor(gray: 0, alpha: 0.10))
-    context.setFillColor(Style.card)
-    context.addPath(CGPath(roundedRect: rect, cornerWidth: 12, cornerHeight: 12, transform: nil))
-    context.fillPath()
-    context.setShadow(offset: .zero, blur: 0, color: nil)
-    return rect
-}
-
-func drawMenuBar(_ context: CGContext, glyphHighlighted: Bool) {
-    let barHeight = 28.0
-    context.setFillColor(Style.menuBar)
-    context.fill(CGRect(x: 0, y: Style.height - barHeight, width: Style.width, height: barHeight))
-
-    let glyphBox = CGRect(x: Style.width - 88, y: Style.height - 24, width: 20, height: 20)
-    if glyphHighlighted {
-        context.setFillColor(Style.accent)
-        context.addPath(CGPath(
-            roundedRect: glyphBox.insetBy(dx: -7, dy: -3),
-            cornerWidth: 5, cornerHeight: 5, transform: nil
-        ))
-        context.fillPath()
-    }
-
-    // The glyph is black artwork on alpha, so it is used as a mask and filled
-    // the way a template image is in a real menu bar.
-    context.saveGState()
-    context.clip(to: glyphBox, mask: menuGlyph)
-    context.setFillColor(CGColor(gray: 1, alpha: glyphHighlighted ? 1 : 0.85))
-    context.fill(glyphBox)
-    context.restoreGState()
-
-    draw("Fri 22:00", NSFont.systemFont(ofSize: 12, weight: .regular),
-         CGColor(gray: 1, alpha: 0.55),
-         at: CGPoint(x: Style.width - 200, y: Style.height - 19), in: context)
-}
-
-/// The before/after card.
-func drawTextScene(_ context: CGContext, showingCleaned: Bool) {
-    let rect = card(context, y: 74, height: 158)
-    let label = showingCleaned ? "PASTED" : "COPIED"
-    draw(label, Style.label, showingCleaned ? Style.accent : Style.faint,
-         at: CGPoint(x: rect.minX + 26, y: rect.maxY - 32), in: context)
-
-    let body = showingCleaned ? cleaned : sample
-    let lines = body.components(separatedBy: "\n")
-    for (offset, line) in lines.enumerated() {
-        let origin = CGPoint(x: rect.minX + 26, y: rect.maxY - 78 - Double(offset) * 36)
-        let source = sample.components(separatedBy: "\n")[offset]
-        let ranges = showingCleaned
-            ? changedRanges(in: source).isEmpty ? [] : rewrittenRanges(source: source, cleaned: line)
-            : changedRanges(in: source)
-        highlight(line, changedRanges: ranges, font: Style.mono,
-                  colour: showingCleaned ? Style.after : Style.before,
-                  at: origin, in: context)
-        draw(line, Style.mono, Style.ink, at: origin, in: context)
-    }
-}
-
-/// Where the replacements ended up in the cleaned line, so the green boxes sit
+/// Where those replacements ended up, so the boxes on the cleaned line sit
 /// under the characters that actually changed.
-func rewrittenRanges(source: String, cleaned: String) -> [Range<String.Index>] {
+func markedInResult(source: String, cleaned: String) -> [Range<String.Index>] {
     var ranges: [Range<String.Index>] = []
     var sourceIndex = source.startIndex
     var cleanIndex = cleaned.startIndex
     while sourceIndex < source.endIndex, cleanIndex < cleaned.endIndex {
         let character = String(source[sourceIndex])
         if let replacement = TextNormalizer.normalize(character) {
-            let end = cleaned.index(cleanIndex, offsetBy: replacement.count, limitedBy: cleaned.endIndex)
-                ?? cleaned.endIndex
-            if replacement.isEmpty == false { ranges.append(cleanIndex..<end) }
+            let end = cleaned.index(
+                cleanIndex,
+                offsetBy: replacement.count,
+                limitedBy: cleaned.endIndex
+            ) ?? cleaned.endIndex
+            if !replacement.isEmpty { ranges.append(cleanIndex..<end) }
             cleanIndex = end
         } else {
             cleanIndex = cleaned.index(after: cleanIndex)
@@ -237,66 +228,125 @@ func rewrittenRanges(source: String, cleaned: String) -> [Range<String.Index>] {
     return ranges
 }
 
-/// The menu, dropped down from the glyph.
-func drawMenu(_ context: CGContext, revealed: Int) {
-    let lines: [(String, Bool)] = [
-        ("\u{2713}  Enable PasteBop", false),
-        (report.activityLine, false),
-        (report.lastCopyLine?.replacingOccurrences(of: "\u{2570}\u{2500}", with: "\u{2514}\u{2500}") ?? "", true),
-    ]
-    let shown = Array(lines.prefix(revealed))
-    guard !shown.isEmpty else { return }
+// MARK: - Scene
 
-    let height = 23.0 * Double(shown.count) + 18
-    let rect = CGRect(x: Style.width - 452, y: Style.height - 32 - height, width: 392, height: height)
-    context.setShadow(offset: CGSize(width: 0, height: -3), blur: 14,
-                      color: CGColor(gray: 0, alpha: 0.22))
-    context.setFillColor(CGColor(red: 0.99, green: 0.99, blue: 1, alpha: 1))
-    context.addPath(CGPath(roundedRect: rect, cornerWidth: 8, cornerHeight: 8, transform: nil))
-    context.fillPath()
-    context.setShadow(offset: .zero, blur: 0, color: nil)
+func drawMenuBar(on canvas: Canvas, open isOpen: Bool) {
+    canvas.fill(
+        CGRect(
+            x: 0,
+            y: Style.height - Style.menuBarHeight,
+            width: Style.width,
+            height: Style.menuBarHeight
+        ),
+        Style.menuBar
+    )
 
-    for (offset, entry) in shown.enumerated() {
-        let y = rect.maxY - 25 - Double(offset) * 23
-        draw(entry.0, Style.menuFont, entry.1 ? Style.accent : Style.ink,
-             at: CGPoint(x: rect.minX + 16, y: y), in: context)
+    let box = CGRect(x: Style.width - 88, y: Style.height - 24, width: 20, height: 20)
+    if isOpen {
+        canvas.rounded(box.insetBy(dx: -7, dy: -3), radius: 5, Style.accent)
+    }
+    canvas.glyph(menuGlyph, in: box, color: CGColor(gray: 1, alpha: isOpen ? 1 : 0.85))
+    canvas.text(
+        "Fri 22:00",
+        font: Style.clock,
+        color: CGColor(gray: 1, alpha: 0.55),
+        at: CGPoint(x: Style.width - 200, y: Style.height - 19)
+    )
+}
+
+func drawCard(on canvas: Canvas, cleaned showCleaned: Bool) {
+    let rect = CGRect(x: 60, y: 74, width: Style.width - 120, height: 158)
+    canvas.rounded(rect, radius: 12, Style.card, shadow: true)
+    canvas.text(
+        showCleaned ? "PASTED" : "COPIED",
+        font: Style.label,
+        color: showCleaned ? Style.accent : Style.faint,
+        at: CGPoint(x: rect.minX + 26, y: rect.maxY - 32)
+    )
+
+    let sourceLines = sample.components(separatedBy: "\n")
+    let shownLines = (showCleaned ? cleaned : sample).components(separatedBy: "\n")
+    for (offset, line) in shownLines.enumerated() {
+        let origin = CGPoint(x: rect.minX + 26, y: rect.maxY - 78 - Double(offset) * 36)
+        let source = sourceLines[offset]
+        let ranges = showCleaned
+            ? markedInResult(source: source, cleaned: line)
+            : markedInSource(source)
+        canvas.highlight(
+            line,
+            ranges: ranges,
+            color: showCleaned ? Style.afterMark : Style.beforeMark,
+            at: origin
+        )
+        canvas.text(line, font: Style.mono, color: Style.ink, at: origin)
     }
 }
 
-func frame(cleaned showCleaned: Bool, menuLines: Int, glyph: Bool) -> CGImage {
-    let context = newContext()
-    context.setFillColor(Style.backdrop)
-    context.fill(CGRect(x: 0, y: 0, width: Style.width, height: Style.height))
+func drawMenu(on canvas: Canvas, revealed: Int) {
+    let reading = report.lastCopyLine?
+        .replacingOccurrences(of: "\u{2570}\u{2500}", with: "\u{2514}\u{2500}") ?? ""
+    let items: [(text: String, accented: Bool)] = [
+        ("\u{2713}  Enable PasteBop", false),
+        (report.activityLine, false),
+        (reading, true),
+    ]
+    let shown = Array(items.prefix(revealed))
+    guard !shown.isEmpty else { return }
 
-    drawTextScene(context, showingCleaned: showCleaned)
-    draw(showCleaned
-         ? "curly quotes, em dashes and ellipses replaced automatically"
-         : "copied from a chat assistant",
-         NSFont.systemFont(ofSize: 14, weight: .regular), Style.faint,
-         at: CGPoint(x: 62, y: 40), in: context)
+    let height = 23.0 * Double(shown.count) + 18
+    let rect = CGRect(
+        x: Style.width - 452,
+        y: Style.height - 32 - height,
+        width: 392,
+        height: height
+    )
+    canvas.rounded(rect, radius: 8, Style.popover, shadow: true)
 
-    drawMenuBar(context, glyphHighlighted: glyph)
-    drawMenu(context, revealed: menuLines)
+    for (offset, item) in shown.enumerated() {
+        canvas.text(
+            item.text,
+            font: Style.menuItem,
+            color: item.accented ? Style.accent : Style.ink,
+            at: CGPoint(x: rect.minX + 16, y: rect.maxY - 25 - Double(offset) * 23)
+        )
+    }
+}
 
-    guard let image = context.makeImage() else { fail("render failed") }
-    return image
+func frame(cleaned showCleaned: Bool, menuLines: Int, menuOpen: Bool) -> CGImage {
+    let canvas = Canvas()
+    canvas.fill(CGRect(x: 0, y: 0, width: Style.width, height: Style.height), Style.backdrop)
+    drawCard(on: canvas, cleaned: showCleaned)
+    canvas.text(
+        showCleaned
+            ? "curly quotes, em dashes and ellipses replaced automatically"
+            : "copied from a chat assistant",
+        font: Style.caption,
+        color: Style.faint,
+        at: CGPoint(x: 62, y: 40)
+    )
+    drawMenuBar(on: canvas, open: menuOpen)
+    drawMenu(on: canvas, revealed: menuLines)
+    return canvas.image()
 }
 
 // MARK: - Assemble
 
 let frames: [(image: CGImage, delay: Double)] = [
-    (frame(cleaned: false, menuLines: 0, glyph: false), 1.8),
-    (frame(cleaned: true, menuLines: 0, glyph: true), 0.5),
-    (frame(cleaned: true, menuLines: 0, glyph: false), 1.0),
-    (frame(cleaned: true, menuLines: 1, glyph: true), 0.35),
-    (frame(cleaned: true, menuLines: 2, glyph: true), 0.5),
-    (frame(cleaned: true, menuLines: 3, glyph: true), 2.6),
+    (frame(cleaned: false, menuLines: 0, menuOpen: false), 1.8),
+    (frame(cleaned: true, menuLines: 0, menuOpen: true), 0.5),
+    (frame(cleaned: true, menuLines: 0, menuOpen: false), 1.0),
+    (frame(cleaned: true, menuLines: 1, menuOpen: true), 0.35),
+    (frame(cleaned: true, menuLines: 2, menuOpen: true), 0.5),
+    (frame(cleaned: true, menuLines: 3, menuOpen: true), 2.6),
 ]
 
 let output = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
     .appending(path: "img/demo.gif")
 guard let destination = CGImageDestinationCreateWithURL(
-    output as CFURL, UTType.gif.identifier as CFString, frames.count, nil
+    output as CFURL,
+    UTType.gif.identifier as CFString,
+    frames.count,
+    nil
 ) else { fail("cannot write \(output.path)") }
 
 CGImageDestinationSetProperties(destination, [
@@ -314,8 +364,7 @@ for entry in frames {
 guard CGImageDestinationFinalize(destination) else { fail("cannot finalize the gif") }
 
 let attributes = try? FileManager.default.attributesOfItem(atPath: output.path)
-let size = (attributes?[.size] as? Int) ?? 0
-print("img/demo.gif  \(frames.count) frames  \(size / 1024) KB")
+print("img/demo.gif  \(frames.count) frames  \(((attributes?[.size] as? Int) ?? 0) / 1024) KB")
 print("  before: \(sample.components(separatedBy: "\n")[0])")
 print("  after:  \(cleaned.components(separatedBy: "\n")[0])")
 print("  menu:   \(report.activityLine)")
