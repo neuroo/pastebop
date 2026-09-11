@@ -43,8 +43,10 @@ final class AppModel {
     private(set) var copyCount: Int
     private(set) var tally: RewriteTally
     private(set) var countingSince: Date
-    /// How the last copy read. Not persisted: it describes this session.
+    /// How the last copy read, and how much of it was rewritten. Not
+    /// persisted: both describe the copy in hand, not a lifetime.
     private(set) var lastProvenance: Provenance?
+    private(set) var lastCopyCharacters: Int?
     private(set) var machineWrittenCopies: Int
 
     var report: ActivityReport {
@@ -54,6 +56,7 @@ final class AppModel {
             tally: tally,
             rules: rules,
             lastProvenance: lastProvenance,
+            lastCopyCharacters: lastCopyCharacters,
             machineWrittenCopies: machineWrittenCopies
         )
     }
@@ -67,6 +70,7 @@ final class AppModel {
         tally = RewriteTally()
         machineWrittenCopies = 0
         lastProvenance = nil
+        lastCopyCharacters = nil
         countingSince = .now
         defaults.set(countingSince, forKey: Key.countingSince)
         persistStatistics()
@@ -142,6 +146,7 @@ final class AppModel {
 
         let provenance = outcome.provenance
         lastProvenance = provenance
+        lastCopyCharacters = outcome.tally.characterCount
         if provenance.isMachineWritten { machineWrittenCopies += 1 }
 
         persistStatistics()

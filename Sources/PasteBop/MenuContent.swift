@@ -24,6 +24,7 @@ struct MenuContent: View {
 
         if report.hasStatistics {
             Menu("Statistics") {
+                Text(report.lifetimeLine)
                 Text("Since \(model.countingSince.formatted(date: .abbreviated, time: .omitted))")
                 if let dominant = report.dominantFamilyLine {
                     Text(dominant)

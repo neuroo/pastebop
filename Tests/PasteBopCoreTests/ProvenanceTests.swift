@@ -115,7 +115,12 @@ struct ProvenanceReportTests {
 
     private static let locale = Locale(identifier: "en_US")
 
-    private func report(copies: Int, machine: Int, last: Provenance? = nil) -> ActivityReport {
+    private func report(
+        copies: Int,
+        machine: Int,
+        last: Provenance? = nil,
+        lastCharacters: Int? = nil
+    ) -> ActivityReport {
         var tally = RewriteTally()
         tally.record("2014", times: 3)
         return ActivityReport(
@@ -124,6 +129,7 @@ struct ProvenanceReportTests {
             tally: tally,
             locale: Self.locale,
             lastProvenance: last,
+            lastCopyCharacters: lastCharacters,
             machineWrittenCopies: machine
         )
     }
@@ -147,6 +153,26 @@ struct ProvenanceReportTests {
         tally.record("2019", times: 8)
         let machine = Provenance(tally: tally, characterCount: 900)
         let line = report(copies: 20, machine: 3, last: machine).lastCopyLine
-        #expect(line?.hasPrefix("Reads machine-written") == true)
+        #expect(line == "\u{2570}\u{2500} Reads machine-written (curly quotes, em dashes)")
+    }
+
+    @Test("Leads with the copy in hand, not the lifetime total")
+    func activityLineIsAboutThisCopy() {
+        let just = report(copies: 812, machine: 500, lastCharacters: 47)
+        #expect(just.activityLine == "Cleaned 47 characters in this copy")
+        #expect(just.lifetimeLine == "Cleaned 3 characters in 812 copies")
+    }
+
+    @Test("Falls back to the lifetime total before anything is copied")
+    func activityLineBeforeACopy() {
+        #expect(report(copies: 812, machine: 500).activityLine
+                == "Cleaned 3 characters in 812 copies")
+        #expect(report(copies: 0, machine: 0).activityLine == "Cleaned 3 characters in 0 copies")
+    }
+
+    @Test("Says one character, not 1 characters")
+    func singularCopy() {
+        #expect(report(copies: 1, machine: 0, lastCharacters: 1).activityLine
+                == "Cleaned 1 character in this copy")
     }
 }

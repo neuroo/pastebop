@@ -68,8 +68,8 @@ PasteBop already counts every em dash, curly quote and ellipsis it rewrites,
 which turns out to be most of a fingerprint. So it tells you:
 
 ```
-Cleaned 47 characters in 1 copy
-Reads machine-written (curly quotes, em dashes, ellipses)
+Cleaned 47 characters in this copy
+╰─ Reads machine-written (curly quotes, em dashes, ellipses)
 ```
 
 What it actually measures is typographic polish, and a word processor produces
@@ -79,9 +79,11 @@ Quotes *and* em dashes *and* ellipses together are the house style of a chat
 assistant. Below 240 characters it says nothing, because the density of a
 tweet means nothing.
 
-Over time the Statistics submenu adds the share, once ten copies have gone by:
+The lifetime total moves into the Statistics submenu, which adds the share
+once ten copies have gone by:
 
 ```
+Cleaned 4,102 characters in 812 copies
 63% of it read as machine-written
 ```
 

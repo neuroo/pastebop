@@ -16,6 +16,8 @@ public struct ActivityReport: Sendable {
     public let locale: Locale
     /// What the most recent copy read as, if anything was copied this launch.
     public let lastProvenance: Provenance?
+    /// Characters rewritten in that copy.
+    public let lastCopyCharacters: Int?
     /// How many rewritten copies read as machine-written, over the lifetime.
     public let machineWrittenCopies: Int
 
@@ -26,6 +28,7 @@ public struct ActivityReport: Sendable {
         rules: RewriteRules = .builtIn,
         locale: Locale = .autoupdatingCurrent,
         lastProvenance: Provenance? = nil,
+        lastCopyCharacters: Int? = nil,
         machineWrittenCopies: Int = 0
     ) {
         self.isEnabled = isEnabled
@@ -34,6 +37,7 @@ public struct ActivityReport: Sendable {
         self.rules = rules
         self.locale = locale
         self.lastProvenance = lastProvenance
+        self.lastCopyCharacters = lastCopyCharacters
         self.machineWrittenCopies = machineWrittenCopies
     }
 
@@ -41,9 +45,14 @@ public struct ActivityReport: Sendable {
 
     public var hasStatistics: Bool { characterCount > 0 }
 
-    /// Under the enable switch.
+    /// Under the enable switch. The most recent copy where there is one,
+    /// because that is what the reading below it refers to; the lifetime
+    /// total moves into the Statistics submenu.
     public var activityLine: String {
         guard isEnabled else { return "Paused" }
+        if let characters = lastCopyCharacters, characters > 0 {
+            return "Cleaned \(plural(characters, "character")) in this copy"
+        }
         guard hasStatistics else { return "Watching the clipboard" }
         return "Cleaned \(summaryLine)"
     }
@@ -66,10 +75,18 @@ public struct ActivityReport: Sendable {
         }
     }
 
-    /// What the last copy read as: "Reads machine-written (em dashes, curly
-    /// quotes)". Nil when there was too little text to say anything.
+    /// What the last copy read as, hanging off `activityLine`. Nil when there
+    /// was too little text to say anything honest.
+    ///
+    /// The box-drawing prefix stands in for indentation, which a SwiftUI menu
+    /// item does not otherwise offer.
     public var lastCopyLine: String? {
-        lastProvenance?.summary
+        lastProvenance?.summary.map { "\u{2570}\u{2500} \($0)" }
+    }
+
+    /// The lifetime total, for the Statistics submenu.
+    public var lifetimeLine: String {
+        "Cleaned \(summaryLine)"
     }
 
     /// "63% of what you pasted read as machine-written", once there are
