@@ -101,6 +101,14 @@ ARCHS=$(lipo -archs "$VOLUME/PasteBop.app/Contents/MacOS/PasteBop" 2>/dev/null |
 [[ -f "$VOLUME/PasteBop.app/Contents/Resources/AppIcon.icns" ]] \
 	&& pass "icon present" || fail "no AppIcon.icns"
 
+# The Services entry is declared in Info.plist and dispatched by name. A
+# rename on one side without the other silently removes the menu item.
+SERVICE=$(/usr/libexec/PlistBuddy -c "Print :NSServices:0:NSMessage" "$PLIST" 2>/dev/null \
+	|| echo "missing")
+[[ "$SERVICE" == "selectBlop" ]] \
+	&& pass "SelectBlop service declared" \
+	|| fail "NSServices message is '$SERVICE', expected selectBlop"
+
 echo
 if (( FAILURES > 0 )); then
 	echo "==> $FAILURES problem(s); do not publish" >&2

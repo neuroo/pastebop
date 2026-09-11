@@ -63,9 +63,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         currentVersion: Bundle.main.shortVersion
     )
 
+    private lazy var service = SelectBlopService { [model] in model.rules }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         model.start()
         updates.start()
+
+        // The Services menu entry. macOS caches the registration, so nudge it
+        // in case the bundle moved since it was last scanned.
+        NSApp.servicesProvider = service
+        NSUpdateDynamicServices()
     }
 }
 

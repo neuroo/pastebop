@@ -244,6 +244,32 @@ struct PasteboardNormalizerTests {
         }
     }
 
+    @Test("Leaves text too large to handle on the main thread alone")
+    func oversizedTextIsLeftAlone() {
+        // One byte over the limit: rewriting it would stall whatever app the
+        // Services entry was invoked from.
+        let huge = String(repeating: "a", count: PasteboardNormalizer.maximumTextBytes)
+            + "\u{2014}"
+        withPasteboard { pasteboard in
+            write([(.string, Data(huge.utf8))], to: pasteboard)
+            let before = pasteboard.changeCount
+
+            #expect(!PasteboardNormalizer.normalize(pasteboard).didRewrite)
+            #expect(pasteboard.changeCount == before)
+            #expect(pasteboard.string(forType: .string)?.hasSuffix("\u{2014}") == true)
+        }
+    }
+
+    @Test("Still rewrites text just under the limit")
+    func largeButAcceptableText() {
+        let big = String(repeating: "a", count: 1 << 20) + "\u{2014}"
+        withPasteboard { pasteboard in
+            write([(.string, Data(big.utf8))], to: pasteboard)
+            #expect(PasteboardNormalizer.normalize(pasteboard).didRewrite)
+            #expect(pasteboard.string(forType: .string)?.hasSuffix("--") == true)
+        }
+    }
+
     // MARK: - Safety
 
     @Test("Never rewrites content a password manager concealed")

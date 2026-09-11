@@ -75,6 +75,12 @@ Throughput`. The tripwires in `TextNormalizerTests` catch a collapse, not a
 2x regression. Two things that look harmless and are not: formatting any
 string inside the scanner's loop, and giving `Hit` a refcounted field.
 
+Styled text is the slow path, and it is AppKit's cost, not the scanner's: RTF
+round-trips at roughly 4 MB/s. Build the rewritten attributed string in one
+forward pass. Calling `replaceCharacters` once per rewrite is quadratic,
+because every call shuffles the attribute runs after it — 17 MB took over
+three minutes that way against four seconds this way.
+
 ## State on disk
 
 | Where | What |
@@ -125,6 +131,29 @@ Not yet built: the lifetime "Clipboard Wrapped" write-up. That is the one
 place an API call would earn its keep, since it would ship only aggregate
 integers and prose is what a model is good at. It needs a key and a privacy
 story, so it is a deliberate next step rather than an omission.
+
+## Threading
+
+`NSPasteboard` is not safe off the main thread, so the work is split:
+`snapshot` (main) reads the text flavours into a `Sendable` value, `rewrite`
+(anywhere) transforms it, `apply` (main) writes it back. `apply` refuses if the
+change count moved, so a slow rewrite can never clobber something copied while
+it was running.
+
+`PasteboardWork` decides where it runs. Under `inlineTextBytes` (256 KB) it is
+done inline, because dispatching costs more than the work. Above it, the
+clipboard path goes to a queue and never blocks, while the Services path goes
+to a queue and *waits*, because the system reads the pasteboard the moment the
+handler returns and there is nowhere to hand a late answer. The wait has a five
+second deadline; past it the selection is left alone.
+
+**A service pasteboard must be read one flavour at a time.** It belongs to the
+app that invoked the service, and that app is blocked inside the call. Asking
+it to materialise a derived flavour — which `pasteboardItems` plus
+`data(forType:)` does while enumerating — waits on an app that is waiting on
+you, and the service dies on the system's 30 second timeout. `normalizeSelection`
+therefore uses `availableType(from:)` and reads exactly one type. There is a
+test with a counting data provider asserting nothing else is touched.
 
 ## Security
 

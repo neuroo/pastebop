@@ -65,11 +65,17 @@ final class ClipboardMonitor {
     }
 
     private func poll() {
-        guard pasteboard.changeCount != lastChangeCount else { return }
+        let changeCount = pasteboard.changeCount
+        guard changeCount != lastChangeCount else { return }
+        // Claimed before the work starts, so a large document being rewritten
+        // off the main thread is not picked up again by the next tick.
+        lastChangeCount = changeCount
 
-        let outcome = PasteboardNormalizer.normalize(pasteboard, rules: rules)
-        // Our own write bumps the count; adopting it is what stops the loop.
-        lastChangeCount = outcome.changeCount
-        if outcome.didRewrite { onRewrite(outcome) }
+        PasteboardWork.normalizeClipboard(pasteboard, rules: rules) { [weak self] outcome in
+            guard let self else { return }
+            // Our own write bumps the count; adopting it is what stops the loop.
+            self.lastChangeCount = outcome.changeCount
+            if outcome.didRewrite { self.onRewrite(outcome) }
+        }
     }
 }

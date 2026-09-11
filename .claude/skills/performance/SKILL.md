@@ -40,6 +40,29 @@ is actually hot. Record the numbers before your change and after.
 - `ScalarTable` is a value fetched once per scan, not a namespace of
   `static let`s, because a lazy global costs a `swift_once` check per access.
 
+## The slow path is styled text
+
+The scanner is not the bottleneck for RTF; AppKit's decode and re-encode are,
+at roughly 4 MB/s. Two rules follow:
+
+- Build the rewritten `NSAttributedString` in **one forward pass**. A
+  `replaceCharacters` per rewrite is quadratic and turns 17 MB into minutes.
+- Anything past `inlineTextBytes` goes to a queue. Never do megabytes of RTF
+  on the main thread: for the Services entry that freezes the app the user is
+  typing in, not just PasteBop.
+
+Measure the real thing through the real dispatch, not just the library call:
+
+```bash
+# with the app running and registered
+swift - <<'EOF'
+import AppKit
+let pb = NSPasteboard(name: .init("probe"))
+pb.clearContents(); pb.setString("a\u{2014}b", forType: .string)
+print(NSPerformService("PasteBop/SelectBlop", pb), pb.string(forType: .string) ?? "")
+EOF
+```
+
 ## Rules
 
 - Do not add a branch to `nextRewrite` for a feature that is not needed on

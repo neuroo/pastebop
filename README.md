@@ -65,6 +65,21 @@ Statistics ▸  Since 11 Sep 2026
 **About PasteBop** opens a Help window with the full table and a **Try it**
 button that copies a messy sample so you can watch it get cleaned.
 
+## Without copying: SelectBlop
+
+Select text in any app, right-click, and choose **Services → PasteBop →
+SelectBlop**. The selection is rewritten in place. Nothing goes through the
+clipboard, so whatever you had copied stays copied.
+
+It works on styled text too: select a paragraph in Pages or TextEdit and the
+fonts, colours and links survive — only the characters change. Files and
+links are refused, because their text is an address and an address has to stay
+exactly what it was.
+
+macOS only scans for Services in applications it knows about, so PasteBop has
+to be in `/Applications` for the menu item to appear. If it does not show up,
+check **System Settings → Keyboard → Keyboard Shortcuts → Services**.
+
 ## Where did this text come from?
 
 PasteBop already counts every em dash, curly quote and ellipsis it rewrites,
@@ -263,6 +278,14 @@ PASTEBOP_BENCHMARK=1 swift test -c release --filter Throughput
 
 A typical clipboard is a few kilobytes, so a pass costs microseconds against a
 250 ms budget.
+
+Rewriting styled text is slower, because decoding and re-encoding RTF is
+AppKit's work rather than the scanner's: roughly 4 MB/s against the scanner's
+hundreds. Anything past 256 KB is therefore handed to a background queue. The
+clipboard never waits for it; the Services entry does, because the system reads
+the pasteboard the instant it returns, and gives up after five seconds rather
+than looking like a hang. Measured through the real Services dispatch: a 1 MB
+styled selection round-trips in 338 ms, an 8 MB one in 2.5 s.
 
 ## Linting
 

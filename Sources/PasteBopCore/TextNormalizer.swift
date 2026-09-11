@@ -75,8 +75,12 @@ public enum TextNormalizer {
 
     // MARK: - Attributed text
 
-    /// Keeps the styling. Edits are applied back to front so earlier ranges
-    /// stay valid as the text shifts.
+    /// Keeps the styling.
+    ///
+    /// Built as one forward pass rather than by editing a copy in place. Each
+    /// `replaceCharacters` has to shuffle every attribute run after it, so a
+    /// call per rewrite is quadratic: a 17 MB document took over three
+    /// minutes that way, against a fraction of a second for this.
     public static func normalize(
         _ input: NSAttributedString,
         rules: RewriteRules = .builtIn
@@ -100,10 +104,24 @@ public enum TextNormalizer {
         }
         guard !edits.isEmpty else { return nil }
 
-        let result = NSMutableAttributedString(attributedString: input)
+        let result = NSMutableAttributedString()
         result.beginEditing()
-        for edit in edits.reversed() {
-            result.mutableString.replaceCharacters(in: edit.range, with: edit.text)
+        var cursor = 0
+        for edit in edits {
+            if edit.range.location > cursor {
+                let untouched = NSRange(location: cursor, length: edit.range.location - cursor)
+                result.append(input.attributedSubstring(from: untouched))
+            }
+            if !edit.text.isEmpty {
+                // The replacement inherits the styling of what it replaces.
+                let attributes = input.attributes(at: edit.range.location, effectiveRange: nil)
+                result.append(NSAttributedString(string: edit.text, attributes: attributes))
+            }
+            cursor = edit.range.location + edit.range.length
+        }
+        if cursor < input.length {
+            let tail = NSRange(location: cursor, length: input.length - cursor)
+            result.append(input.attributedSubstring(from: tail))
         }
         result.endEditing()
         return result
