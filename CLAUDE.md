@@ -16,6 +16,7 @@ swift Scripts/make-dmg-background.swift      # regenerate the disk image backgro
 Scripts/make-dmg-layout.sh                   # regenerate the disk image window layout
 Scripts/make-demo.sh                         # regenerate the README demo gif
 PASTEBOP_BENCHMARK=1 swift test -c release --filter Throughput
+PASTEBOP_BENCHMARK=1 swift test -c release --filter Footprint
 ```
 
 Dead-code rules need a compiler log:
@@ -30,6 +31,7 @@ swiftlint analyze --strict --compiler-log-path /tmp/build.log
 | Path | What it is |
 | --- | --- |
 | `Sources/PasteBopCore` | the table, scanner, and pasteboard handling. All the testable logic, no UI. |
+| `Sources/PasteBopCore/RTFRewriter.swift` | the RTF pass, split from its entry point because `private` reaches across extensions only within one file |
 | `Sources/PasteBop` | the menu bar app. SwiftUI `MenuBarExtra`, clipboard monitor, login item. |
 | `App/` | `Info.plist`, asset catalog, icon set |
 | `Scripts/` | build, package, version, icon generation |
@@ -79,6 +81,21 @@ release mode, with `PASTEBOP_BENCHMARK=1 swift test -c release --filter
 Throughput`. The tripwires in `TextNormalizerTests` catch a collapse, not a
 2x regression. Two things that look harmless and are not: formatting any
 string inside the scanner's loop, and giving `Hit` a refcounted field.
+
+**Memory is the other axis, and the easier one to get wrong.** `Footprint`
+reports what each flavour peaks at as a multiple of the text handed to it --
+under 2x for plain, 3x for HTML, 7x for RTF and attributed text. Those
+multiples times `maximumTextBytes` is the most one copy can ask for, and a
+Swift array traps when an allocation fails, so overshooting is a crash rather
+than a slow rewrite. Measure it after changing what a rewriter *builds*, not
+just what it scans. Three that hid there: a source position kept for every
+decoded byte of HTML, a forty-byte record per RTF text token, and attributed
+text holding every autoreleased run of a document at once -- 45x on its own.
+
+Reserve what a rewrite will plausibly need rather than growing into it:
+doubling is *slower* where the output fills what was reserved, measured at 5%.
+`TextNormalizer.reservation(for:)` caps it only to stop an enormous paste
+taking its whole size before a byte has been read.
 
 RTF is rewritten as bytes, like HTML: `RTFTextRewriter` decodes only the text
 tokens (`\'hh`, `\uN`, `\emdash` and friends), scans them with the same
@@ -183,12 +200,31 @@ story, so it is a deliberate next step rather than an omission.
 change count moved, so a slow rewrite can never clobber something copied while
 it was running.
 
-`PasteboardWork` decides where it runs. Under `inlineTextBytes` (256 KB) it is
-done inline, because dispatching costs more than the work. Above it, the
-clipboard path goes to a queue and never blocks, while the Services path goes
-to a queue and *waits*, because the system reads the pasteboard the moment the
-handler returns and there is nowhere to hand a late answer. The wait has a five
-second deadline; past it the selection is left alone.
+`PasteboardWork` decides where it runs. Under `inlineBudget(for:)` it is done
+inline, because dispatching costs more than the work. Above it, the clipboard
+path goes to a queue and never blocks, while the Services path goes to a queue
+and *waits*, because the system reads the pasteboard the moment the handler
+returns and there is nowhere to hand a late answer. The wait has a five second
+deadline; past it the selection is left alone. **Both paths take the same
+budget.** A flat ceiling on the Services path ran three seconds of work on the
+main thread inside a call the system was already blocked on.
+
+The budget starts at `inlineTextBytes` (256 KB), which the default table
+handles in about 2 ms, and shrinks for the two things a customised table can
+do to the cost:
+
+- **Substrings sharing a first scalar** are tried one after another wherever
+  that scalar appears, and each is compared until it fails — so what costs is
+  their total *length*, `ScalarTable.worstSequenceScan`, not how many there
+  are. Counting rules reads two thousand with distinct first scalars (free)
+  the same as two thousand sharing a long prefix (148 ms of main thread). The
+  floor is deliberately tiny: a table this expensive should send everything to
+  the queue, where a dispatch costs microseconds against milliseconds a
+  kilobyte.
+- **A replacement wider than what it matched.** One rule may output
+  `replacementScalars` scalars for a single matched one — measured at 341
+  times the input — and the rewrite is built inline, so the budget has to
+  bound what the main thread *allocates*, not only what it reads.
 
 **SelectBop** declares `NSReturnTypes`, so macOS replaces the selection with
 what comes back, and only offers it where the responder says the text is
@@ -212,13 +248,49 @@ The rules file is user-controlled input and the scanner walks raw bytes, so:
 - `RuleFile.Limits` caps file size, rule count, substring length and
   replacement length. A pathological file must not make the scanner slow or
   the process large.
+- `TextNormalizer.outputLimit(for:)` caps what a rewrite may *produce*, which
+  the input limits do not: at the widest replacement a copy grows 341-fold, so
+  64 MB of text would ask for 21 GB. It is checked as the output grows, to
+  stop before the memory is taken rather than discard it afterwards, and past
+  it the text is left alone — half a clipboard is worse than an unrewritten
+  one.
+
+  **Scaled to the input, not flat.** PasteBop normalises, so a rewrite
+  normally shrinks; a flat ceiling could only be reached by filling it, so a
+  50 KB article took 64 MB and 200 ms to discover it did not fit, against
+  1 MB and 10 ms now. `maximumOutputBytes` remains the hard cap, because
+  nothing may be written that PasteBop would refuse to read back.
+
+  **Every flavour, or they diverge.** Bounding only plain text left the styled
+  flavours of one copy rewritten while the plain one was not, so where it was
+  pasted decided what it said. `forEachRewrite` takes a body returning whether
+  to carry on, and HTML, RTF and attributed text each abandon the *whole*
+  document. HTML counts across text nodes, not within one: a million small
+  nodes grow exactly as fast as one large node. Count every append, not only
+  the splices — the untouched tail and the markup are as unbounded as anything
+  rewritten, and checking only the rewrites let a document come back over its
+  ceiling.
+
+  **Bounding each flavour is still not enough**, because each is measured
+  against its own serialised size and a styled one is bigger: plain text runs
+  out of room while the HTML beside it does not. So `RewriteAttempt`
+  distinguishes "nothing needed changing" from "this could not be done" —
+  `nil` used to mean both — and `PasteboardNormalizer` drops the **whole item**
+  when any flavour gives up. One item is one copy spelled several ways; a
+  clipboard holding two spellings of it is worse than one holding none.
 - HTML escaping of replacements comes from the table *in force*
   (`ScalarTable.htmlEscaped`), never from `Replacements.all`. A user rule
   outputting `<b>` must land in the clipboard's HTML flavour as text, not
   markup.
 - Plain, attributed, HTML and RTF text share one scanner; `FuzzTests` asserts
-  the attributed and RTF paths agree with plain text on every input, so no
-  flavour can diverge from another.
+  every one of them agrees with plain text on every input, so no flavour can
+  diverge from another. HTML was for a long time only checked for *not
+  crashing*, and adding the agreement assertion immediately found a real bug:
+  markup was scanned by `Character`, and a combining mark, ZWJ, variation
+  selector or tag character right after a `>` joins it into one grapheme — so
+  the tag never appeared to end and the rest of the page came back unrewritten.
+  `<p>` before an emoji was enough. **Scan markup by scalar, never by
+  character**, the same lesson `RuleFile.quote` learned from CRLF.
 - `FuzzTests` throws seeded garbage at the parser (only `ParseError` may come
   back) and the scanner (never a crash, never a read past the end). Replay a
   failure from its seed.
@@ -238,11 +310,22 @@ YAML library, since the schema is a flat mapping and a dependency would be the
 only third-party code here. The cost is that valid-but-unsupported YAML is
 rejected, so **every rejection must name the line and say what was expected**.
 
+**Anything written onto a line must be escaped against the set the parser
+splits on**, which is `CharacterSet.newlines` — U+000B, U+000C, U+0085, U+2028
+and U+2029 as well as `\n` and `\r`. That means replacements *and* the
+generated comments, whose name for a substring rule is the substring itself.
+`isLineBreak` asks the set rather than listing it, so the two cannot drift.
+
 **The file holds changes, not the table.** `decode` returns a `RuleOverrides`
-and `RewriteRules` lays it over `Replacements.all`. An entry is `off` to leave
-a character alone, or a quoted replacement — which overrides a default or adds
-a character that had none. `off` is the only unquoted value, so `"off"` is
-still the literal text.
+and `RewriteRules` lays it over `Replacements.all`. An entry carries two
+independent things: whether the character is switched off, and a replacement
+to use in place of the built-in one. Hence `off`, `"--"`, and `off "--"` —
+switched off *and* remembering what it was set to. `off` is the only unquoted
+value, so `"off"` is still the literal text.
+
+The two must stay independent. Collapsing them means switching a character
+off throws away a replacement written for it, and a character with no
+built-in rule disappears from the window with nothing left to switch back on.
 
 Saying nothing is how you ask for the defaults, not how you turn everything
 off. That inversion is the whole reason a new version's characters reach a Mac
@@ -289,6 +372,16 @@ one away before the other Mac ever saw it. The value is the same line the file
 would hold, so what comes back is read by the same parser — and a line this
 build cannot read is skipped rather than allowed to discard everything beside
 it.
+
+**Skipped is not gone.** An entry a newer version wrote is absent from what
+the merge can see, which is exactly what a deletion looks like — and read as
+one it is removed from the file here and then removed from the store,
+destroying for every Mac what only this build failed to parse. The key still
+names the character, so `RemoteRules.unreadable` carries it and the entry is
+left strictly alone: never merged as a deletion, never removed, never
+rewritten in a spelling this build happens to know. A change made here to that
+same character applies here and waits; it travels once a build that
+understands the entry reconciles.
 
 **The local file stays the source of truth.** A change arriving from iCloud is
 written to it, so it reaches the rules through the same parse and the same

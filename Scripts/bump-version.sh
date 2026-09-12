@@ -26,4 +26,7 @@ echo "$NEXT" > VERSION
 echo "$CURRENT -> $NEXT (CFBundleVersion $BUILD_NUMBER)"
 echo
 echo "Next:"
-echo "  git commit -am \"Release $NEXT\" && git tag v$NEXT && git push --follow-tags"
+# Annotated on purpose: --follow-tags pushes annotated tags only, so a
+# lightweight one is created locally and silently never reaches GitHub, and
+# the release workflow never runs.
+echo "  git commit -am \"Release $NEXT\" && git tag -a -m \"PasteBop $NEXT\" v$NEXT && git push --follow-tags"

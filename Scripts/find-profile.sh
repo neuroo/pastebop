@@ -41,7 +41,9 @@ while IFS= read -r -d '' profile; do
 		BEST="$profile"
 		BEST_DATE="$EXPIRES"
 	fi
-done < <(find "$DIR" -name '*.provisionprofile' -o -name '*.mobileprovision' -print0 2>/dev/null)
+# Grouped: without the parentheses -print0 binds to the last alternative
+# only, and every .provisionprofile is found and then silently not printed.
+done < <(find "$DIR" \( -name '*.provisionprofile' -o -name '*.mobileprovision' \) -print0 2>/dev/null)
 
 [[ -n "$BEST" ]] || exit 1
 printf '%s\n' "$BEST"

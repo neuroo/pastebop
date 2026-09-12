@@ -20,7 +20,7 @@ terminal, a code editor or a commit message, and it is already clean.
 ```
 
 Accented letters, emoji, CJK text and rich-text formatting are left exactly as
-they were. Only the 258 characters in the table below are touched.
+they were. Only the 257 characters in the table below are touched.
 
 ---
 
@@ -147,8 +147,9 @@ without your file standing in the way — and deleting a line puts that
 character back to its default.
 
 `off` leaves a character alone. Anything else is the replacement, which must
-be quoted; `""` deletes the match and `"off"` is the literal text. A key is
-one of:
+be quoted; `""` deletes the match and `"off"` is the literal text. Switching
+off a character you had given a replacement writes `off "--"`, so switching it
+back on returns your replacement rather than the default. A key is one of:
 
 | Key | Matches |
 | --- | --- |
@@ -193,7 +194,7 @@ the test suite.
 | Dashes and hyphens (12) | ‐ ‑ ‒ – — ― − ⸺ ⸻ ﹘ ﹣ － | `-` `--` `---` `----` |
 | Punctuation (12) | ․ ‥ … ⋯ ‼ ‽ ⁇ ⁈ ⁉ ⁄ ‖ ‗ | `.` `..` `...` `!!` `?!` `??` `/` |
 | Spaces (16) | no-break, thin, hair, figure, ideographic | a plain space |
-| Invisible characters (157) | zero-width, bidi overrides, tag block, BOM, soft hyphen | removed |
+| Invisible characters (156) | zero-width, bidi overrides, tag block, BOM, soft hyphen | removed |
 | List bullets (11) | • ‣ ⁃ ∙ ▪ ▫ ▸ ▹ ○ ● ◦ | `-` |
 | Math and arrows (16) | × ÷ ± ∕ ∖ ∗ ≈ ≠ ≤ ≥ ← → ↔ ⇐ ⇒ ⇔ | `x` `/` `+/-` `~` `!=` `<=` `->` `=>` |
 
@@ -242,12 +243,25 @@ touched, so PasteBop cannot mangle a password or defeat an auto-clear.
 
 **Data loss.** If any flavour on the clipboard cannot be read back, PasteBop
 leaves the whole clipboard alone rather than risk dropping it. Losing a
-promised file is worse than leaving a curly quote.
+promised file is worse than leaving a curly quote. The same goes for a rewrite
+that will not fit: every flavour of one item is the same text, so if any of
+them cannot be rewritten the item is left exactly as it came, rather than
+pasting one thing as HTML and another as plain text.
 
 **Universal Clipboard.** The rewritten text syncs to your other devices
 normally. One gap: `clearContents()` cannot preserve an app's
 `.currentHostOnly` flag, so content marked local-only could be re-broadcast.
 In practice apps that set it also set `ConcealedType`, which PasteBop skips.
+
+## Privacy
+
+PasteBop collects nothing. The text you copy is read, rewritten in memory and
+written back; it is never stored, never written to disk and never transmitted.
+What stays on your Mac is a set of counts and your own rule changes, both of
+which you can read and clear. If you are signed in to iCloud, your rule changes
+— and only those — sync between your own Macs the way system settings do.
+
+Full policy: <https://github.com/neuroo/pastebop/blob/main/PRIVACY.md>
 
 ## Performance
 

@@ -179,8 +179,23 @@ jobs:
           # A tag push already has its tag; workflow_dispatch does not, and
           # gh would then cut it from the default branch instead of the commit
           # that was just built and verified. Immutable releases freeze the tag
-          # too, so it has to be right the first time. The API ignores
-          # --target when the tag exists, so this is safe on both paths.
+          # too, so it has to be right the first time.
+          #
+          # --target is ignored when the tag already exists, so a dispatch
+          # against a tag pointing somewhere else would publish these
+          # artifacts under a tag naming a different commit. Check first.
+          REF="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/v$VERSION" 2>/dev/null || true)"
+          if [[ -n "$REF" ]]; then
+            SHA="$(printf '%s' "$REF" | jq -r .object.sha)"
+            if [[ "$(printf '%s' "$REF" | jq -r .object.type)" == "tag" ]]; then
+              SHA="$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$SHA" -q .object.sha)"
+            fi
+            if [[ "$SHA" != "$GITHUB_SHA" ]]; then
+              echo "::error::v$VERSION points at $SHA but this run built $GITHUB_SHA."
+              exit 1
+            fi
+          fi
+
           gh release create "v$VERSION" \
             --target "$GITHUB_SHA" \
             --title "PasteBop $VERSION" \

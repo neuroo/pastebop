@@ -22,6 +22,16 @@
 	<string>MARKETING_VERSION</string>
 	<key>CFBundleVersion</key>
 	<string>BUILD_NUMBER</string>
+	<!--
+	  PasteBop encrypts nothing and has no networking of any kind: the only
+	  thing that leaves the Mac is the rules, through iCloud key-value
+	  storage, which is the system's to secure and not ours. Declaring it
+	  here is what stops App Store Connect asking about export compliance on
+	  every upload. Revisit this if the app ever makes a request of its own --
+	  the "Clipboard Wrapped" write-up would be the first.
+	-->
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.utilities</string>
 	<key>LSMinimumSystemVersion</key>

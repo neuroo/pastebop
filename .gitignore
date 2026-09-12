@@ -10,3 +10,23 @@ DerivedData/
 # Claude Code: the skills and CLAUDE.md in this repo are shared, local
 # machine state is not.
 .claude/settings.local.json
+
+# The Mac App Store path needs two certificates, a provisioning profile and an
+# App Store Connect key that all live in one Apple account, so none of it can
+# be reproduced by a clone -- which is the test Scripts/build-app.sh is written
+# to pass. The scripts that drive it stay local.
+Scripts/appstore*
+Scripts/mas-*.sh
+.appstore-uploads
+.appstore-env
+
+# Nothing that identifies that account, or signs on its behalf, is ever a
+# repository file. A leaked .p8 or .p12 lets someone else ship as you, and a
+# profile carries the team id and the certificates it was made with.
+*.p8
+*.p12
+*.cer
+*.certSigningRequest
+*.provisionprofile
+*.mobileprovision
+*.entitlements.local
