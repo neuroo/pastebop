@@ -96,10 +96,18 @@ anything AppKit does not model stay byte-identical. Only RTFD goes through
 
 Under the App Sandbox all of this moves inside the container
 (`~/Library/Containers/info.neuroo.PasteBop/Data/…`), `UserDefaults`
-included. **Nothing migrates it**, and a sandboxed build cannot read the old
-location, so a store build needs a one-time import — an `NSOpenPanel` at the
-old path, since the user picking the file is what grants access. Not built
-yet; it belongs with the sandbox work, not after it.
+included. That needs no code: `AppSupport.directory()` asks for
+`.applicationSupportDirectory` and the sandbox resolves it, which is why
+there is exactly one path derivation in the app and nothing that constructs
+a path of its own.
+
+Data does not carry over from an unsandboxed install, and **that is
+accepted**. A sandboxed build cannot read the old location — it can stat it,
+but opening is denied — so bringing it across would mean an `NSOpenPanel`,
+the user picking the file being what grants access. Since the file now holds
+only *changes*, anyone who has not customised anything loses nothing at all,
+and the rest is a few switches. Not worth the only piece of code in the app
+that would reach outside its own container.
 
 Settings belong in `UserDefaults`. Application Support is for state a user
 might reasonably open, edit or delete by hand, so it is readable JSON with

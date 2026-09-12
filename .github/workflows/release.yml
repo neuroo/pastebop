@@ -22,6 +22,12 @@ jobs:
   release:
     name: Build and publish
     runs-on: macos-latest
+    # Requires a review before the job starts, and only a v* tag can reach
+    # it. Pushing a tag is therefore not enough to publish a release: the
+    # owner has to approve that run. Any signing secrets added later live
+    # here rather than on the repository, where every workflow could read
+    # them.
+    environment: release
     permissions:
       contents: write # create the release and its tag; nothing else is needed
     env:
