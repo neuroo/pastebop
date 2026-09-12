@@ -12,12 +12,30 @@
 public struct RuleOverrides: Equatable, Sendable {
 
     /// What an entry says about one character.
-    public enum Change: Equatable, Sendable {
-        /// Leave it alone; a default rule for it does not apply.
-        case off
-        /// Rewrite it to this instead. Adds a rule where there was no
-        /// default, replaces the output where there was.
-        case output(String)
+    ///
+    /// The two halves are independent on purpose: switching a character off
+    /// must not throw away a replacement someone wrote for it, or switching
+    /// it back on would silently hand back the built-in one — and a
+    /// character with no built-in rule would vanish with nothing left to
+    /// switch back on.
+    public struct Change: Equatable, Sendable {
+        /// The replacement, or nil to use the built-in one.
+        public var output: String?
+        /// Left alone: no rule fires for this character.
+        public var isOff: Bool
+
+        public init(output: String? = nil, isOff: Bool = false) {
+            self.output = output
+            self.isOff = isOff
+        }
+
+        public static let off = Self(isOff: true)
+
+        public static func output(_ text: String) -> Self { Self(output: text) }
+
+        /// On, with no replacement of its own: the built-in rule exactly, so
+        /// there is nothing for an entry to record.
+        var saysNothing: Bool { !isOff && output == nil }
     }
 
     public private(set) var changes: [Pattern: Change]
@@ -31,9 +49,19 @@ public struct RuleOverrides: Equatable, Sendable {
     public var isEmpty: Bool { changes.isEmpty }
     public var count: Int { changes.count }
 
+    /// An entry that says nothing is no entry, so the file never carries a
+    /// line with no effect and the merge never sees one.
     public subscript(pattern: Pattern) -> Change? {
         get { changes[pattern] }
-        set { changes[pattern] = newValue }
+        set { changes[pattern] = (newValue?.saysNothing ?? false) ? nil : newValue }
+    }
+
+    /// Without the entries these keys name. What is out of reach on the
+    /// other side cannot be compared against it, so it is left out rather
+    /// than counted as a difference that needs publishing.
+    func ignoring(_ keys: Set<String>) -> Self {
+        guard !keys.isEmpty else { return self }
+        return Self(changes.filter { !keys.contains($0.key.key) })
     }
 
     /// A dictionary has no order, and re-encoding has to be byte-stable.
@@ -64,25 +92,23 @@ extension RewriteRules {
 
         for rule in defaults {
             defaultPatterns.insert(rule.pattern)
-            switch overrides[rule.pattern] {
-            case nil:
+            guard let change = overrides[rule.pattern] else {
                 result.append(rule)
-            case .off:
                 continue
-            case .output(let output):
-                result.append(Replacement(
-                    pattern: rule.pattern,
-                    output: output,
-                    name: rule.name,
-                    category: rule.category
-                ))
             }
+            guard !change.isOff else { continue }
+            result.append(Replacement(
+                pattern: rule.pattern,
+                output: change.output ?? rule.output,
+                name: rule.name,
+                category: rule.category
+            ))
         }
 
         // Sorted, because a dictionary is not, and both the file and the
         // window read this order.
         for entry in overrides.sorted where !defaultPatterns.contains(entry.pattern) {
-            guard case .output(let output) = entry.change else { continue }
+            guard !entry.change.isOff, let output = entry.change.output else { continue }
             result.append(Replacement(
                 pattern: entry.pattern,
                 output: output,

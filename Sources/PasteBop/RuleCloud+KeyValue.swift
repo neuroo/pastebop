@@ -34,30 +34,52 @@ final class KeyValueCloud: RuleCloud {
 
     private let store = NSUbiquitousKeyValueStore.default
 
-    var remote: RuleOverrides {
-        let lines = store.dictionaryRepresentation.compactMap { key, value -> String? in
-            guard key.hasPrefix(Self.prefix) else { return nil }
-            return value as? String
+    var remote: RemoteRules {
+        var overrides = RuleOverrides()
+        var unreadable: Set<String> = []
+        for (key, value) in held() {
+            guard let entry = (value as? String).flatMap(RuleFile.decodeEntry) else {
+                // The key still names the character, so an entry written by a
+                // version that spells it differently is known to be *there*
+                // even though nothing here can say what it holds.
+                unreadable.insert(String(key.dropFirst(Self.prefix.count)))
+                continue
+            }
+            overrides[entry.pattern] = entry.change
         }
-        // A line iCloud holds but this build cannot read is skipped rather
-        // than allowed to throw away everything alongside it.
-        return (try? RuleFile.decode(RuleFile.document(lines))) ?? .none
+        return RemoteRules(overrides, unreadable: unreadable)
     }
 
     func publish(_ overrides: RuleOverrides) {
+        // An entry this build cannot read is left exactly as it is. Removing
+        // it because the merge could not see it would destroy for every Mac
+        // what only this one failed to read, and rewriting it in the spelling
+        // this build knows would throw away whatever it actually said.
+        let held = held()
+        let untouchable = Set(held.compactMap { key, value in
+            (value as? String).flatMap(RuleFile.decodeEntry) == nil ? key : nil
+        })
+
         var wanted: [String: String] = [:]
         for entry in overrides.sorted {
-            wanted[Self.prefix + entry.pattern.key] = RuleFile.line(for: entry.pattern, entry.change)
+            let key = Self.prefix + entry.pattern.key
+            guard !untouchable.contains(key) else { continue }
+            wanted[key] = RuleFile.line(for: entry.pattern, entry.change)
         }
 
-        for key in store.dictionaryRepresentation.keys
-        where key.hasPrefix(Self.prefix) && wanted[key] == nil {
+        for key in held.keys where wanted[key] == nil && !untouchable.contains(key) {
             store.removeObject(forKey: key)
         }
         for (key, value) in wanted where store.string(forKey: key) != value {
             store.set(value, forKey: key)
         }
         store.synchronize()
+    }
+
+    /// Only this app's entries: the store is shared with anything else the
+    /// container holds.
+    private func held() -> [String: Any] {
+        store.dictionaryRepresentation.filter { $0.key.hasPrefix(Self.prefix) }
     }
 
     /// The token is not kept: this lives as long as the app does, so there

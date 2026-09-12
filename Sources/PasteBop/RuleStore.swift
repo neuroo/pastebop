@@ -81,15 +81,21 @@ final class RuleStore {
 
     /// Writes the changes the rules window made, and picks them up again the
     /// same way an edit made by hand is picked up.
-    func save(_ overrides: RuleOverrides) {
+    @discardableResult
+    func save(_ overrides: RuleOverrides) -> Bool {
         save(RuleFile.encode(overrides))
     }
 
-    private func save(_ text: String) {
-        write(text)
+    @discardableResult
+    private func save(_ text: String) -> Bool {
+        // Reloading after a failed write reads the file that is still there,
+        // parses it happily and clears the error — so a save into somewhere
+        // unwritable looked like it had worked.
+        guard write(text) else { return false }
         load()
         // The file has a new inode, so the old watch is stale.
         watch()
+        return true
     }
 
     func edit() {
@@ -134,12 +140,15 @@ final class RuleStore {
         }
     }
 
-    private func write(_ text: String) {
-        guard let fileURL else { return }
+    @discardableResult
+    private func write(_ text: String) -> Bool {
+        guard let fileURL else { return false }
         do {
             try text.write(to: fileURL, atomically: true, encoding: .utf8)
+            return true
         } catch {
             failure = "Could not write the rules file: \(error.localizedDescription)"
+            return false
         }
     }
 

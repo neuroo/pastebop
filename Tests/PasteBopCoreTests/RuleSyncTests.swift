@@ -15,9 +15,14 @@ struct RuleSyncTests {
     private func merge(
         base: RuleOverrides = .none,
         local: RuleOverrides = .none,
-        remote: RuleOverrides = .none
+        remote: RuleOverrides = .none,
+        unreadable: Set<String> = []
     ) -> RuleSync.Outcome {
-        RuleSync.merge(base: base, local: local, remote: remote)
+        RuleSync.merge(
+            base: base,
+            local: local,
+            remote: RemoteRules(remote, unreadable: unreadable)
+        )
     }
 
     @Test("Everyone already agrees")
@@ -116,5 +121,61 @@ struct RuleSyncTests {
     @Test("Switching off every character PasteBop knows still fits")
     func everyCharacterOffStillFits() {
         #expect(Replacements.all.count < RuleSync.maxSyncedEntries)
+    }
+
+    @Test("An entry the other side holds but this build cannot read stays put")
+    func unreadableRemoteEntriesAreNotDeletions() {
+        // It is absent from what came back, which is exactly what a deletion
+        // looks like. Read as one it is removed here and then removed from
+        // the store, so a single line this build could not parse destroys
+        // the entry for every Mac.
+        let had = RuleOverrides([emDash: .off])
+        let outcome = merge(base: had, local: had, remote: .none, unreadable: [emDash.key])
+        #expect(outcome.merged == had)
+        #expect(!outcome.writeLocal)
+        #expect(!outcome.publish)
+    }
+
+    @Test("An unreadable entry is no reason to publish")
+    func unreadableEntriesDoNotProvokeAPublish() {
+        // It can never be in what came back, so comparing against it would
+        // differ on every pass and republish forever — overwriting the entry
+        // that was supposed to be left alone.
+        let had = RuleOverrides([emDash: .off, ellipsis: .off])
+        let outcome = merge(
+            base: had,
+            local: had,
+            remote: RuleOverrides([emDash: .off]),
+            unreadable: [ellipsis.key]
+        )
+        #expect(outcome.merged == had)
+        #expect(!outcome.publish)
+    }
+
+    @Test("Leaving one entry alone does not freeze the others")
+    func changesBesideAnUnreadableEntryStillTravel() {
+        let outcome = merge(
+            local: RuleOverrides([emDash: .off]),
+            remote: .none,
+            unreadable: [ellipsis.key]
+        )
+        #expect(outcome.merged == RuleOverrides([emDash: .off]))
+        #expect(outcome.publish)
+    }
+
+    @Test("A character changed here still wins over an unreadable one there")
+    func aLocalChangeBeatsAnUnreadableEntry() {
+        // The merge cannot reconcile with something it cannot read, so the
+        // Mac someone is sitting at keeps its answer. Publishing it is the
+        // cloud's business: it leaves the entry alone until a build that
+        // understands it reconciles.
+        let outcome = merge(
+            base: RuleOverrides([emDash: .off]),
+            local: RuleOverrides([emDash: .output("---")]),
+            remote: .none,
+            unreadable: [emDash.key]
+        )
+        #expect(outcome.merged[emDash] == .output("---"))
+        #expect(!outcome.writeLocal)
     }
 }

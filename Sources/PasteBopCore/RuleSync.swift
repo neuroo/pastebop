@@ -3,6 +3,27 @@
 //  PasteBopCore
 //
 
+/// What the other side holds, and how much of it this build could read.
+///
+/// An entry written by a newer version can be there and still not parse
+/// here. It is absent from `overrides`, and that absence is not a deletion:
+/// read as one it would be propagated to the file and then removed from the
+/// store, destroying for every Mac an entry only this one could not read.
+public struct RemoteRules: Equatable, Sendable {
+
+    public var overrides: RuleOverrides
+
+    /// `Pattern.key` for each entry that is there and could not be read.
+    /// They are left exactly as they are until a build that understands them
+    /// reconciles, so nothing here can overwrite or remove one.
+    public var unreadable: Set<String>
+
+    public init(_ overrides: RuleOverrides = .none, unreadable: Set<String> = []) {
+        self.overrides = overrides
+        self.unreadable = unreadable
+    }
+}
+
 /// Merging one Mac's changes with the same user's changes elsewhere.
 ///
 /// Each entry travels on its own — one key in the key-value store per
@@ -33,20 +54,23 @@ public enum RuleSync {
     public static func merge(
         base: RuleOverrides,
         local: RuleOverrides,
-        remote: RuleOverrides
+        remote: RemoteRules
     ) -> Outcome {
         var merged = RuleOverrides()
         var patterns = Set(base.changes.keys)
         patterns.formUnion(local.changes.keys)
-        patterns.formUnion(remote.changes.keys)
+        patterns.formUnion(remote.overrides.changes.keys)
 
         for pattern in patterns {
             let was = base[pattern]
             let here = local[pattern]
-            let there = remote[pattern]
+            let there = remote.overrides[pattern]
 
             let changedHere = here != was
-            let changedThere = there != was
+            // An entry this build cannot read is absent from `overrides` and
+            // has not changed; it is simply out of reach. Anything else reads
+            // it as deleted on the other side.
+            let changedThere = !remote.unreadable.contains(pattern.key) && there != was
 
             // Nil is a value here: an entry deleted on one side is a change
             // like any other, which is how switching a character back on
@@ -65,7 +89,7 @@ public enum RuleSync {
         return Outcome(
             merged: merged,
             writeLocal: merged != local,
-            publish: !tooLarge && merged != remote,
+            publish: !tooLarge && merged.ignoring(remote.unreadable) != remote.overrides,
             tooLarge: tooLarge
         )
     }

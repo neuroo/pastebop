@@ -88,7 +88,7 @@ public enum RuleFile {
             firstSeen[pattern] = number
 
             let change = try parseChange(rest, on: number)
-            if case .output(let output) = change {
+            if let output = change.output {
                 guard output.unicodeScalars.count <= Limits.replacementScalars else {
                     throw ParseError(line: number, reason: .replacementTooLong)
                 }
@@ -100,18 +100,19 @@ public enum RuleFile {
         return overrides
     }
 
-    /// `off` is the one value that is not quoted. Quotes stay required for a
-    /// replacement, or `--  # em dash` would be ambiguous and a replacement
-    /// of `#` impossible — and `"off"` still means the literal text.
+    /// `off` is the one value that is not quoted, optionally followed by the
+    /// replacement to remember. Quotes stay required otherwise, or
+    /// `--  # em dash` would be ambiguous and a replacement of `#`
+    /// impossible — and `"off"` alone still means the literal text.
     static func parseChange(_ text: String, on number: Int) throws -> RuleOverrides.Change {
         let keyword = "off"
         if text.lowercased() == keyword || text.lowercased().hasPrefix(keyword + " ")
             || text.lowercased().hasPrefix(keyword + "\t") {
-            let trailing = String(text.dropFirst(keyword.count)).trimmingCharacters(in: .whitespaces)
-            guard trailing.isEmpty || trailing.hasPrefix("#") else {
-                throw ParseError(line: number, reason: .trailingText(trailing))
-            }
-            return .off
+            let rest = String(text.dropFirst(keyword.count)).trimmingCharacters(in: .whitespaces)
+            if rest.isEmpty || rest.hasPrefix("#") { return .off }
+            // `off "--"`: switched off, and remembering what it was set to,
+            // so switching it back on returns that rather than the default.
+            return RuleOverrides.Change(output: try parseValue(rest, on: number), isOff: true)
         }
         return .output(try parseValue(text, on: number))
     }
@@ -292,6 +293,7 @@ public enum RuleFile {
         case "\"": return "\""
         case "'": return "'"
         case "n": return "\n"
+        case "r": return "\r"
         case "t": return "\t"
         case "0": return "\0"
         case "u":
@@ -367,6 +369,18 @@ extension RuleFile {
         ]
     }
 
+    /// One entry line on its own, or nil when this build cannot read it.
+    ///
+    /// What the key-value store holds is read an entry at a time, because
+    /// decoding it as one document would let a single line from a newer
+    /// version discard every other entry — which a merge then reads as the
+    /// other side having deleted them. Nil is not absence: the caller has to
+    /// keep such an entry out of the merge rather than let it look deleted.
+    public static func decodeEntry(_ line: String) -> (pattern: Pattern, change: RuleOverrides.Change)? {
+        guard let one = try? decode(document([line])) else { return nil }
+        return one.sorted.first
+    }
+
     /// A minimal document around a set of entry lines: what the key-value
     /// store and the last-synced record hold, without the file's header.
     public static func document(_ lines: [String]) -> String {
@@ -387,39 +401,87 @@ extension RuleFile {
     ) -> String {
         // Not String.padding(toLength:), which truncates.
         let key = entry.pattern.fileKey.rightPadded(to: keyWidth)
-        let value = switch entry.change {
-        case .off: "off"
-        case .output(let output): quote(output)
+        // `off "--"` is switched off but remembers its replacement, so
+        // switching it back on does not silently hand back the built-in one.
+        let value = switch (entry.change.isOff, entry.change.output) {
+        case (true, nil): "off"
+        case (true, let output?): "off " + quote(output)
+        case (false, let output?): quote(output)
+        case (false, nil): "off"
         }
         return "  \(key): \(value.rightPadded(to: 8))  # \(comment(for: entry.pattern))"
     }
 
+    /// A comment runs to the end of the line, so a control character in one
+    /// ends the line early and the file it was written into no longer parses.
+    private static func printable(_ text: String) -> String {
+        var result = ""
+        for scalar in text.unicodeScalars {
+            switch scalar {
+            case "\n": result += "\\n"
+            case "\r": result += "\\r"
+            case "\t": result += "\\t"
+            // A comment is not parsed, but it is still on a line, and a
+            // separator in a character's name would end that line early.
+            case let other where other.value < 0x20 || other.value == 0x7F || isLineBreak(other):
+                result += "\\u{\(String(other.value, radix: 16, uppercase: true))}"
+            default: result.unicodeScalars.append(scalar)
+            }
+        }
+        return result
+    }
+
+    /// Scalars, not characters: Swift reads CR LF as one grapheme cluster,
+    /// so iterating characters matches neither `\r` nor `\n` and writes the
+    /// pair straight into the file, ending the line early.
     private static func quote(_ output: String) -> String {
         var escaped = ""
-        for character in output {
-            switch character {
+        for scalar in output.unicodeScalars {
+            switch scalar {
             case "\\": escaped += "\\\\"
             case "\"": escaped += "\\\""
             case "\n": escaped += "\\n"
+            case "\r": escaped += "\\r"
             case "\t": escaped += "\\t"
-            default: escaped.append(character)
+            case let other where isLineBreak(other): escaped += hexEscape(other)
+            default: escaped.unicodeScalars.append(scalar)
             }
         }
         return "\"\(escaped)\""
+    }
+
+    /// What the parser splits a document on, so what has to be escaped
+    /// wherever it is written. More than `\n` and `\r`: `CharacterSet`
+    /// counts U+000B, U+000C, U+0085, U+2028 and U+2029 as newlines too, and
+    /// a replacement holding one used to write a line that came back as two.
+    /// Asked of the set itself rather than listed, so the two cannot drift.
+    private static func isLineBreak(_ scalar: Unicode.Scalar) -> Bool {
+        CharacterSet.newlines.contains(scalar)
+    }
+
+    /// `\uXXXX`, the only numeric escape the parser reads. Every scalar it
+    /// treats as a newline is inside the basic plane, so four digits reach
+    /// all of them.
+    private static func hexEscape(_ scalar: Unicode.Scalar) -> String {
+        let digits = String(scalar.value, radix: 16, uppercase: true)
+        return "\\u" + String(repeating: "0", count: max(0, 4 - digits.count)) + digits
     }
 
     /// The name comes from the built-in table where there is one, so
     /// changing what a character becomes never changes what it is called.
     private static func comment(for pattern: Pattern) -> String {
         let known = Replacements.builtIn(pattern)
-        let name = known?.name ?? pattern.displayName
+        // The name too, not just the glyph: a substring's display name is the
+        // substring itself, so a separator inside one would end the line it
+        // was written on and the file would come back with an extra rule.
+        let name = printable(known?.name ?? pattern.displayName)
         guard known?.category.hasVisibleGlyphs ?? true else { return name }
         if case .scalars(let range) = pattern, range.lowerBound == range.upperBound,
            let scalar = Unicode.Scalar(range.lowerBound) {
-            return "\(scalar)  \(name)"
+            return "\(printable(String(scalar)))  \(name)"
         }
         if case .sequence(let scalars) = pattern {
-            let text = String(String.UnicodeScalarView(scalars.compactMap(Unicode.Scalar.init)))
+            let text = printable(String(String.UnicodeScalarView(scalars.compactMap(Unicode.Scalar.init))))
             if !text.isEmpty { return "\(text)  \(name)" }
         }
         return name

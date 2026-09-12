@@ -78,6 +78,27 @@ struct RuleOverridesTests {
         #expect(rules.replacements.count == RewriteRules.builtIn.replacements.count - 2)
     }
 
+    @Test("A wide range covers every block it spans")
+    func wideRangesReachTheDenseBlocks() {
+        // The dense Latin-1 and punctuation arrays are read before the wide
+        // ranges, so a range spanning them used to rewrite the characters
+        // past them and silently miss the ones inside.
+        let rules = RewriteRules(overrides: RuleOverrides([.scalars(0x00A1...0x3000): .output("Z")]))
+        for scalar: UInt32 in [0x00A1, 0x00FF, 0x0100, 0x2FFF] {
+            let text = String(String.UnicodeScalarView([Unicode.Scalar(scalar)].compactMap { $0 }))
+            #expect(TextNormalizer.normalize(text, rules: rules) == "Z")
+        }
+    }
+
+    @Test("A rule for one character beats a range that covers it")
+    func singleScalarRulesWinOverRanges() throws {
+        // Both the table and rule(for:) have to agree on which is used, or
+        // what is rewritten and what is described come apart.
+        let rules = RewriteRules(overrides: RuleOverrides([.scalars(0x00A1...0x3000): .output("Z")]))
+        #expect(TextNormalizer.normalize("\u{2014}", rules: rules) == "--")
+        #expect(rules.rule(for: 0x2014)?.output == "--")
+    }
+
     @Test("Added characters come out in a stable order")
     func addedRulesAreOrderedDeterministically() {
         let overrides = RuleOverrides([

@@ -16,12 +16,17 @@ struct RuleCloudMirrorTests {
 
     /// Stands in for iCloud. `arrive` is another Mac writing to it.
     private final class FakeCloud: RuleCloud {
-        var remote: RuleOverrides = .none
+        var remote = RemoteRules()
         private(set) var publishCount = 0
         private var onChange: (@MainActor @Sendable () -> Void)?
 
+        /// As the real store does: an entry nothing here can read is left
+        /// exactly as it is, neither removed nor rewritten.
         func publish(_ overrides: RuleOverrides) {
-            remote = overrides
+            remote = RemoteRules(
+                overrides.ignoring(remote.unreadable),
+                unreadable: remote.unreadable
+            )
             publishCount += 1
         }
 
@@ -30,7 +35,7 @@ struct RuleCloudMirrorTests {
         }
 
         func arrive(_ overrides: RuleOverrides) {
-            remote = overrides
+            remote = RemoteRules(overrides, unreadable: remote.unreadable)
             onChange?()
         }
     }
@@ -46,10 +51,16 @@ struct RuleCloudMirrorTests {
             self.overrides = overrides
         }
 
-        func save(_ overrides: RuleOverrides) {
+        /// Set to fail a write, the way a read-only directory would.
+        var savesFail = false
+
+        @discardableResult
+        func save(_ overrides: RuleOverrides) -> Bool {
+            guard !savesFail else { return false }
             self.overrides = overrides
             saveCount += 1
             onOverridesChanged?(overrides)
+            return true
         }
     }
 
@@ -65,7 +76,7 @@ struct RuleCloudMirrorTests {
         let cloud = FakeCloud()
         RuleCloudMirror(store: store, cloud: cloud, defaults: try scratchDefaults()).start()
 
-        #expect(cloud.remote == RuleOverrides([emDash: .off]))
+        #expect(cloud.remote.overrides == RuleOverrides([emDash: .off]))
         // Saving tells the mirror the file moved, which reconciles again.
         // That has to stop rather than write back and forth forever.
         #expect(store.saveCount == 0)
@@ -91,12 +102,12 @@ struct RuleCloudMirrorTests {
         let theirs = RuleOverrides([emDash: .off, ellipsis: .output("...")])
         let store = FakeStore()
         let cloud = FakeCloud()
-        cloud.remote = theirs
+        cloud.remote = RemoteRules(theirs)
 
         RuleCloudMirror(store: store, cloud: cloud, defaults: try scratchDefaults()).start()
 
         #expect(store.overrides == theirs)
-        #expect(cloud.remote == theirs)
+        #expect(cloud.remote.overrides == theirs)
         #expect(cloud.publishCount == 0)
     }
 
@@ -106,7 +117,7 @@ struct RuleCloudMirrorTests {
         let had = RuleOverrides([emDash: .off])
         let store = FakeStore(had)
         let cloud = FakeCloud()
-        cloud.remote = had
+        cloud.remote = RemoteRules(had)
 
         // First run agrees with iCloud, which is what records the base.
         RuleCloudMirror(store: store, cloud: cloud, defaults: defaults).start()
@@ -115,7 +126,7 @@ struct RuleCloudMirrorTests {
         // Now the character is switched back on here.
         store.overrides = .none
         RuleCloudMirror(store: store, cloud: cloud, defaults: defaults).start()
-        #expect(cloud.remote.isEmpty)
+        #expect(cloud.remote.overrides.isEmpty)
         #expect(store.overrides.isEmpty)
     }
 
@@ -127,7 +138,7 @@ struct RuleCloudMirrorTests {
         let had = RuleOverrides([emDash: .off])
         let store = FakeStore()
         let cloud = FakeCloud()
-        cloud.remote = had
+        cloud.remote = RemoteRules(had)
 
         RuleCloudMirror(store: store, cloud: cloud, defaults: try scratchDefaults()).start()
         #expect(store.overrides == had)
@@ -144,7 +155,7 @@ struct RuleCloudMirrorTests {
 
         let both = RuleOverrides([emDash: .off, ellipsis: .off])
         #expect(store.overrides == both)
-        #expect(cloud.remote == both)
+        #expect(cloud.remote.overrides == both)
     }
 
     @Test("Too many changes to travel still apply here, and say so")
@@ -175,14 +186,119 @@ struct RuleCloudMirrorTests {
         mirror.start()
 
         store.overrides = RuleOverrides([emDash: .off])
-        cloud.arrive(cloud.remote)
+        cloud.arrive(cloud.remote.overrides)
         #expect(store.overrides[emDash] == .off)
 
         store.overrides = RuleOverrides([emDash: .off, ellipsis: .off])
-        cloud.arrive(cloud.remote)
+        cloud.arrive(cloud.remote.overrides)
         #expect(store.overrides[emDash] == .off)
         #expect(store.overrides[ellipsis] == .off)
-        #expect(cloud.remote == RuleOverrides([emDash: .off, ellipsis: .off]))
+        #expect(cloud.remote.overrides == RuleOverrides([emDash: .off, ellipsis: .off]))
+    }
+
+    @Test("A set too large to travel is not recorded as synced")
+    func oversizedSetsDoNotAdvanceTheBase() throws {
+        // Recording them as agreed-with-iCloud when nothing was published
+        // makes the next reconcile read all of them as remote deletions.
+        var many = RuleOverrides()
+        for scalar in 0x3000..<(0x3000 + RuleSync.maxSyncedEntries + 1) {
+            many[.scalars(UInt32(scalar)...UInt32(scalar))] = .off
+        }
+        let store = FakeStore(many)
+        let cloud = FakeCloud()
+        let defaults = try scratchDefaults()
+
+        RuleCloudMirror(store: store, cloud: cloud, defaults: defaults).start()
+        #expect(store.overrides.count == many.count)
+
+        RuleCloudMirror(store: store, cloud: cloud, defaults: defaults).start()
+        #expect(store.overrides.count == many.count)
+    }
+
+    @Test("A save that fails does not record the changes as synced")
+    func failedSaveDoesNotAdvanceTheBase() throws {
+        // Recording them anyway makes the next reconcile read the rules still
+        // in iCloud as deletions and remove them from every Mac.
+        let defaults = try scratchDefaults()
+        let theirs = RuleOverrides([emDash: .off])
+        let store = FakeStore()
+        store.savesFail = true
+        let cloud = FakeCloud()
+        cloud.remote = RemoteRules(theirs)
+
+        RuleCloudMirror(store: store, cloud: cloud, defaults: defaults).start()
+        #expect(store.overrides.isEmpty)
+
+        // The disk recovers; iCloud must still hold the rule.
+        store.savesFail = false
+        RuleCloudMirror(store: store, cloud: cloud, defaults: defaults).start()
+        #expect(cloud.remote.overrides == theirs)
+        #expect(store.overrides == theirs)
+    }
+
+    @Test("An entry iCloud holds but this build cannot read is not a deletion")
+    func unreadableRemoteEntriesAreNotDeletions() throws {
+        // A newer version writes an entry in a spelling this one does not
+        // understand. It is missing from what the merge can see, and read as
+        // a deletion it would be removed from the file here *and* from the
+        // store — destroying for every Mac what only this build failed to
+        // read.
+        let defaults = try scratchDefaults()
+        let had = RuleOverrides([emDash: .off, ellipsis: .off])
+        let store = FakeStore(had)
+        let cloud = FakeCloud()
+        cloud.remote = RemoteRules(had)
+
+        RuleCloudMirror(store: store, cloud: cloud, defaults: defaults).start()
+        #expect(cloud.publishCount == 0)
+
+        // Now this build stops being able to read the ellipsis entry.
+        cloud.remote = RemoteRules(
+            RuleOverrides([emDash: .off]),
+            unreadable: [ellipsis.key]
+        )
+        RuleCloudMirror(store: store, cloud: cloud, defaults: defaults).start()
+
+        #expect(store.overrides == had)
+        #expect(cloud.publishCount == 0)
+    }
+
+    @Test("An unreadable entry does not start a publish that never settles")
+    func unreadableEntriesDoNotLoop() throws {
+        // It is absent from what the merge compares against, so a merge that
+        // keeps it would differ from the store on every pass and publish
+        // forever, rewriting the entry it was supposed to leave alone.
+        let defaults = try scratchDefaults()
+        let store = FakeStore(RuleOverrides([emDash: .off]))
+        let cloud = FakeCloud()
+        cloud.remote = RemoteRules(RuleOverrides([emDash: .off]))
+        RuleCloudMirror(store: store, cloud: cloud, defaults: defaults).start()
+
+        cloud.remote = RemoteRules(.none, unreadable: [emDash.key])
+        let mirror = RuleCloudMirror(store: store, cloud: cloud, defaults: defaults)
+        mirror.start()
+        mirror.start()
+
+        #expect(cloud.publishCount == 0)
+        #expect(store.overrides == RuleOverrides([emDash: .off]))
+    }
+
+    @Test("A change beside an unreadable entry still travels")
+    func changesBesideAnUnreadableEntryStillSync() throws {
+        // Leaving one entry alone must not freeze the rest: the whole point
+        // of a key per character is that they are independent.
+        let defaults = try scratchDefaults()
+        let store = FakeStore()
+        let cloud = FakeCloud()
+        cloud.remote = RemoteRules(.none, unreadable: [ellipsis.key])
+        let mirror = RuleCloudMirror(store: store, cloud: cloud, defaults: defaults)
+        mirror.start()
+
+        store.overrides = RuleOverrides([emDash: .off])
+        cloud.arrive(cloud.remote.overrides)
+
+        #expect(cloud.remote.overrides == RuleOverrides([emDash: .off]))
+        #expect(cloud.remote.unreadable == [ellipsis.key])
     }
 
     @Test("Nothing anywhere is nothing done")

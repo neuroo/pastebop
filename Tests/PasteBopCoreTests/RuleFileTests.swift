@@ -98,11 +98,30 @@ struct RuleFileTests {
         #expect(reason(huge) == .fileTooLarge(bytes: RuleFile.Limits.fileBytes + 1))
     }
 
+    @Test("An entry line reads back on its own")
+    func decodesOneEntry() throws {
+        // What iCloud holds is read this way, an entry at a time: decoding
+        // them together would make one line from a newer version read as
+        // "everything was deleted".
+        let entry = try #require(RuleFile.decodeEntry(
+            RuleFile.line(for: .scalars(0x2026...0x2026), .output("..."))
+        ))
+        #expect(entry.pattern == .scalars(0x2026...0x2026))
+        #expect(entry.change == .output("..."))
+    }
+
+    @Test("A line this build cannot read says so rather than reading as empty")
+    func decodeEntryRejectsWhatItCannotRead() {
+        // Nil has to be distinguishable from "no entry": the sync treats the
+        // two completely differently, and getting it wrong deletes rules.
+        #expect(RuleFile.decodeEntry("U+NOPE: \"x\"") == nil)
+        #expect(RuleFile.decodeEntry("") == nil)
+    }
+
     // MARK: - Reading
 
     private func output(_ overrides: RuleOverrides, _ scalar: UInt32) -> String? {
-        guard case .output(let text) = overrides[.scalars(scalar...scalar)] else { return nil }
-        return text
+        overrides[.scalars(scalar...scalar)]?.output
     }
 
     @Test("Reads a minimal file")
@@ -153,6 +172,27 @@ struct RuleFileTests {
     ])
     func quoting(_ line: String, _ expected: String) throws {
         #expect(output(try RuleFile.decode(document(line)), 0x2014) == expected)
+    }
+
+    @Test("Control characters in a replacement survive the round trip", arguments: [
+        "\r", "\n", "\t", "a\rb", "\r\n",
+        // Everything else `CharacterSet.newlines` splits on: a line holding
+        // one of these came back as two, and the file no longer parsed.
+        "\u{0085}", "\u{2028}", "\u{2029}", "\u{000B}", "\u{000C}", "a\u{2028}b",
+    ])
+    func controlCharactersRoundTrip(_ output: String) throws {
+        let overrides = RuleOverrides([.scalars(0x2014...0x2014): .output(output)])
+        #expect(try RuleFile.decode(RuleFile.encode(overrides)) == overrides)
+    }
+
+    @Test("A separator inside a pattern survives too", arguments: [
+        0x0085, 0x2028, 0x2029, 0x000B, 0x000C, 0x000A, 0x000D,
+    ] as [UInt32])
+    func separatorsInPatternsRoundTrip(_ scalar: UInt32) throws {
+        // Not the replacement this time: a substring's generated comment is
+        // the substring itself, so the separator ended the line from there.
+        let overrides = RuleOverrides([.sequence([0x0061, scalar, 0x0062]): .output("X")])
+        #expect(try RuleFile.decode(RuleFile.encode(overrides)) == overrides)
     }
 
     @Test("A replacement containing a hash is not mistaken for a comment")

@@ -8,8 +8,9 @@ import Foundation
 /// Somewhere the changes can be mirrored to, one entry at a time.
 @MainActor
 public protocol RuleCloud {
-    var remote: RuleOverrides { get }
-    /// Make it match this exactly: entries that are gone are removed.
+    var remote: RemoteRules { get }
+    /// Make it match this, except entries this build cannot read: those are
+    /// left exactly as they are, neither removed nor rewritten.
     func publish(_ overrides: RuleOverrides)
     func start(onChange: @escaping @MainActor @Sendable () -> Void)
 }
@@ -18,7 +19,10 @@ public protocol RuleCloud {
 @MainActor
 public protocol RuleStoring: AnyObject {
     var overrides: RuleOverrides { get }
-    func save(_ overrides: RuleOverrides)
+    /// False when the changes did not reach disk. The mirror must not record
+    /// them as agreed with iCloud in that case.
+    @discardableResult
+    func save(_ overrides: RuleOverrides) -> Bool
     var onOverridesChanged: ((RuleOverrides) -> Void)? { get set }
 }
 
@@ -75,8 +79,18 @@ public final class RuleCloudMirror {
             : nil
 
         if outcome.publish { cloud.publish(outcome.merged) }
-        if outcome.writeLocal { store.save(outcome.merged) }
+        if outcome.writeLocal, !store.save(outcome.merged) {
+            // The file did not change, so this Mac has not agreed to
+            // anything. Recording it would make the next reconcile read the
+            // rules still in iCloud as deletions and remove them.
+            failure = "Could not save the rules, so they were not synced."
+            return
+        }
 
+        // The base is what this Mac and iCloud last *agreed* on. Recording a
+        // set that was never published would make the next merge read every
+        // absent entry as a deletion from the other side and remove it here.
+        guard !outcome.tooLarge else { return }
         base = outcome.merged
         defaults.set(Self.text(for: outcome.merged), forKey: Key.base)
     }

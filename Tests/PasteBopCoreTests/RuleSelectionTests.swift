@@ -70,6 +70,35 @@ struct RuleSelectionTests {
         #expect(selection.changes[emDash] == .output(" -- "))
     }
 
+    @Test("A changed replacement survives being switched off, saved and reloaded")
+    func offThenOnAcrossASaveKeepsTheChange() throws {
+        // In-session the set on offer still held it, so this looked fine
+        // until the file was written and read back: the entry said only
+        // "off", and switching it on again handed back the built-in "--".
+        var selection = RuleSelection(overrides: RuleOverrides([emDash: .output(" -- ")]))
+        selection.setOn(try rule(0x2014, in: selection), false)
+
+        let reloaded = try RuleFile.decode(RuleFile.encode(selection.changes))
+        var after = RuleSelection(overrides: reloaded)
+        after.setOn(try rule(0x2014, in: after), true)
+        #expect(table(after).rule(for: 0x2014)?.output == " -- ")
+    }
+
+    @Test("A character with no built-in rule can be switched off and back on")
+    func customOnlyRuleSurvivesBeingSwitchedOff() throws {
+        // It used to vanish from the set on offer entirely, leaving nothing
+        // to switch back on and no way to recover it from the window.
+        let copyright = Pattern.scalars(0x00A9...0x00A9)
+        var selection = RuleSelection(overrides: RuleOverrides([copyright: .output("(c)")]))
+        selection.setOn(try rule(0x00A9, in: selection), false)
+
+        let reloaded = try RuleFile.decode(RuleFile.encode(selection.changes))
+        var after = RuleSelection(overrides: reloaded)
+        #expect(after.universe.contains { $0.range == 0x00A9...0x00A9 })
+        after.setOn(try rule(0x00A9, in: after), true)
+        #expect(table(after).rule(for: 0x00A9)?.output == "(c)")
+    }
+
     @Test("A half-on family reads as on, and says how many")
     func reportsAPartlySwitchedOffFamily() throws {
         var selection = RuleSelection(overrides: .none)

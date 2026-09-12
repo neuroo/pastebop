@@ -26,7 +26,7 @@ public struct RuleSelection: Sendable {
 
         for rule in defaults {
             known.insert(rule.pattern)
-            if case .output(let output) = overrides[rule.pattern] {
+            if let output = overrides[rule.pattern]?.output {
                 universe.append(Replacement(
                     pattern: rule.pattern,
                     output: output,
@@ -38,8 +38,11 @@ public struct RuleSelection: Sendable {
             }
         }
 
+        // Switched off or not: a character with no built-in rule stays on
+        // offer as long as there is a replacement recorded for it, or there
+        // would be nothing left to switch back on.
         for entry in overrides.sorted where !known.contains(entry.pattern) {
-            guard case .output(let output) = entry.change else { continue }
+            guard let output = entry.change.output else { continue }
             universe.append(Replacement(
                 pattern: entry.pattern,
                 output: output,
@@ -67,7 +70,7 @@ public struct RuleSelection: Sendable {
     }
 
     public func isOn(_ rule: Replacement) -> Bool {
-        overrides[rule.pattern] != .off
+        !(overrides[rule.pattern]?.isOff ?? false)
     }
 
     /// On when the family is doing anything at all. A switch cannot show the
@@ -90,18 +93,13 @@ public struct RuleSelection: Sendable {
     // MARK: - Writing
 
     public mutating func setOn(_ rule: Replacement, _ isOn: Bool) {
-        guard isOn else {
-            overrides[rule.pattern] = .off
-            return
-        }
-        // A character whose replacement was changed keeps it: the set on
-        // offer still holds it, so off-and-on again is not a way to quietly
-        // lose an edit. One matching its default needs no entry at all.
-        if let builtIn = Replacements.builtIn(rule.pattern), builtIn.output == rule.output {
-            overrides[rule.pattern] = nil
-        } else {
-            overrides[rule.pattern] = .output(rule.output)
-        }
+        // The replacement is recorded either way, so switching off and on
+        // again — across a save and a relaunch, not just within a session —
+        // gives back what was written rather than the built-in one. An entry
+        // that matches its default and is on says nothing and is dropped.
+        let builtIn = Replacements.builtIn(rule.pattern)
+        let output = rule.output == builtIn?.output ? nil : rule.output
+        overrides[rule.pattern] = RuleOverrides.Change(output: output, isOff: !isOn)
     }
 
     public mutating func setOn(_ category: Replacement.Category, _ isOn: Bool) {
