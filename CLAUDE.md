@@ -147,6 +147,14 @@ to a queue and *waits*, because the system reads the pasteboard the moment the
 handler returns and there is nowhere to hand a late answer. The wait has a five
 second deadline; past it the selection is left alone.
 
+There are two Services entries, and the split is not cosmetic. **SelectBlop**
+declares `NSReturnTypes`, so macOS replaces the selection with what comes
+back — and therefore only offers it where the responder says the text is
+editable. **CopyBlop** declares none and writes to the general clipboard, so it
+works on a web page or a PDF. The app cannot detect editability itself: a
+service provider gets a pasteboard and nothing else. Do not try; add the
+send-only variant instead.
+
 **A service pasteboard must be read one flavour at a time.** It belongs to the
 app that invoked the service, and that app is blocked inside the call. Asking
 it to materialise a derived flavour — which `pasteboardItems` plus

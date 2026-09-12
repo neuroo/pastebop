@@ -190,6 +190,97 @@ struct PasteboardWorkTests {
         }
     }
 
+    // MARK: - CopyBlop, for selections that cannot be edited
+
+    @Test("Cleans onto the clipboard and leaves the selection alone")
+    func copyLeavesTheSourceAlone() {
+        withPasteboard { selection in
+            withPasteboard { clipboard in
+                write("a\u{2014}b", to: selection)
+                let before = selection.changeCount
+
+                #expect(PasteboardWork.copyNormalizedSelection(
+                    selection, rules: .builtIn, clipboard: clipboard
+                ))
+                #expect(clipboard.string(forType: .string) == "a--b")
+                // The read-only source is untouched, which is the whole point.
+                #expect(selection.string(forType: .string) == "a\u{2014}b")
+                #expect(selection.changeCount == before)
+            }
+        }
+    }
+
+    @Test("Copies text that needed no cleaning, because the user asked")
+    func copyAlreadyCleanText() {
+        withPasteboard { selection in
+            withPasteboard { clipboard in
+                write("already clean", to: selection)
+                #expect(PasteboardWork.copyNormalizedSelection(
+                    selection, rules: .builtIn, clipboard: clipboard
+                ))
+                #expect(clipboard.string(forType: .string) == "already clean")
+            }
+        }
+    }
+
+    @Test("Reports failure only when there is nothing readable")
+    func copyWithNothingToRead() {
+        withPasteboard { selection in
+            withPasteboard { clipboard in
+                selection.clearContents()
+                #expect(!PasteboardWork.copyNormalizedSelection(
+                    selection, rules: .builtIn, clipboard: clipboard
+                ))
+            }
+        }
+    }
+
+    @Test("A styled selection is copied styled, and also as plain text")
+    func copyStyledAddsPlainText() throws {
+        let styled = NSAttributedString(string: "x \u{201C}y\u{201D}")
+        let rtf = try #require(styled.rtf(
+            from: NSRange(location: 0, length: styled.length),
+            documentAttributes: [:]
+        ))
+        try withPasteboard { selection in
+            try withPasteboard { clipboard in
+                selection.clearContents()
+                let item = NSPasteboardItem()
+                item.setData(rtf, forType: .rtf)
+                selection.writeObjects([item])
+
+                #expect(PasteboardWork.copyNormalizedSelection(
+                    selection, rules: .builtIn, clipboard: clipboard
+                ))
+                let out = try #require(clipboard.data(forType: .rtf))
+                let decoded = try #require(NSAttributedString(rtf: out, documentAttributes: nil))
+                #expect(decoded.string == "x \"y\"")
+                // Pasting into a terminal has to work too.
+                #expect(clipboard.string(forType: .string) == "x \"y\"")
+            }
+        }
+    }
+
+    @Test("Copying reads one flavour only, like replacing does")
+    func copyReadsOnlyOneFlavour() {
+        let decoy = CountingProvider()
+        let other = NSPasteboard.PasteboardType("com.example.expensive")
+        withPasteboard { selection in
+            withPasteboard { clipboard in
+                selection.clearContents()
+                let item = NSPasteboardItem()
+                item.setData(Data("a\u{2014}b".utf8), forType: .string)
+                item.setDataProvider(decoy, forTypes: [other])
+                selection.writeObjects([item])
+
+                #expect(PasteboardWork.copyNormalizedSelection(
+                    selection, rules: .builtIn, clipboard: clipboard
+                ))
+                #expect(decoy.requests == 0)
+            }
+        }
+    }
+
     @Test("The clipboard path reports back on the main actor")
     func clipboardCompletionRunsOnMain() async {
         let pasteboard = NSPasteboard.withUniqueName()

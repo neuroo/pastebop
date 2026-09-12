@@ -91,21 +91,9 @@ public enum PasteboardWork {
               data.count <= PasteboardNormalizer.maximumTextBytes
         else { return unchanged }
 
-        let rewritten: Data?
-        if data.count <= PasteboardNormalizer.inlineTextBytes {
-            rewritten = PasteboardNormalizer.rewrite(data, as: type, rules: rules)
-        } else {
-            let box = DataBox()
-            let finished = DispatchSemaphore(value: 0)
-            queue.async {
-                box.value = PasteboardNormalizer.rewrite(data, as: type, rules: rules)
-                finished.signal()
-            }
-            guard finished.wait(timeout: .now() + deadline) == .success else { return unchanged }
-            rewritten = box.value
+        guard let rewritten = rewriteWithinDeadline(data, as: type, rules: rules) else {
+            return unchanged
         }
-
-        guard let rewritten else { return unchanged }
 
         var tally = RewriteTally()
         var characterCount = 0
@@ -122,6 +110,61 @@ public enum PasteboardWork {
             tally: tally,
             characterCount: characterCount
         )
+    }
+    /// Cleans a selection onto the general clipboard, leaving the source
+    /// alone. For selections that cannot be edited, where writing back is not
+    /// an option.
+    ///
+    /// Returns false only when the selection could not be read at all, which
+    /// is worth telling the user about; text that simply needed no cleaning
+    /// still lands on the clipboard, because they asked for it.
+    @MainActor
+    @discardableResult
+    public static func copyNormalizedSelection(
+        _ pasteboard: NSPasteboard,
+        rules: RewriteRules,
+        clipboard: NSPasteboard = .general
+    ) -> Bool {
+        // One flavour, for the same reason as normalizeSelection: enumerating
+        // a service pasteboard deadlocks against the app that invoked it.
+        guard let type = pasteboard.availableType(from: PasteboardNormalizer.selectionTypes),
+              let data = pasteboard.data(forType: type),
+              data.count <= PasteboardNormalizer.maximumTextBytes
+        else { return false }
+
+        let rewritten = rewriteWithinDeadline(data, as: type, rules: rules) ?? data
+
+        clipboard.clearContents()
+        let item = NSPasteboardItem()
+        item.setData(rewritten, forType: type)
+        // Styled text also gets a plain form, so it still pastes into a
+        // terminal or a code editor.
+        if type != .string,
+           let styled = PasteboardNormalizer.plainText(from: rewritten, as: type) {
+            item.setData(Data(styled.utf8), forType: .string)
+        }
+        return clipboard.writeObjects([item])
+    }
+
+    /// Inline when small, on the queue with a deadline when not. Nil means
+    /// nothing changed, or the deadline passed.
+    @MainActor
+    private static func rewriteWithinDeadline(
+        _ data: Data,
+        as type: NSPasteboard.PasteboardType,
+        rules: RewriteRules
+    ) -> Data? {
+        if data.count <= PasteboardNormalizer.inlineTextBytes {
+            return PasteboardNormalizer.rewrite(data, as: type, rules: rules)
+        }
+        let box = DataBox()
+        let finished = DispatchSemaphore(value: 0)
+        queue.async {
+            box.value = PasteboardNormalizer.rewrite(data, as: type, rules: rules)
+            finished.signal()
+        }
+        guard finished.wait(timeout: .now() + deadline) == .success else { return nil }
+        return box.value
     }
 }
 
