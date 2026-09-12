@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  Used only by a build that asked for iCloud (PASTEBOP_ICLOUD=1) and is
+	  signed with a real identity. A source build never reaches this file:
+	  the container below belongs to this project's team, so nobody else's
+	  signature can claim it.
+
+	  The identifier is <TeamID>.<container>, and the container is the
+	  bundle identifier. Both are permanent — changing either orphans the
+	  data already synced under the old one.
+	-->
+	<key>com.apple.developer.ubiquity-kvstore-identifier</key>
+	<string>5L7LH429GP.info.neuroo.PasteBop</string>
+</dict>
+</plist>
