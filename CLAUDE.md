@@ -75,11 +75,12 @@ Throughput`. The tripwires in `TextNormalizerTests` catch a collapse, not a
 2x regression. Two things that look harmless and are not: formatting any
 string inside the scanner's loop, and giving `Hit` a refcounted field.
 
-Styled text is the slow path, and it is AppKit's cost, not the scanner's: RTF
-round-trips at roughly 4 MB/s. Build the rewritten attributed string in one
-forward pass. Calling `replaceCharacters` once per rewrite is quadratic,
-because every call shuffles the attribute runs after it — 17 MB took over
-three minutes that way against four seconds this way.
+RTF is rewritten as bytes, like HTML: `RTFTextRewriter` decodes only the text
+tokens (`\'hh`, `\uN`, `\emdash` and friends), scans them with the same
+scanner, and splices the matches back, so control words, the font table and
+anything AppKit does not model stay byte-identical. Only RTFD goes through
+`NSAttributedString`; build that rewritten string in one forward pass, because
+`replaceCharacters` per rewrite is quadratic in the attribute runs after it.
 
 ## State on disk
 
@@ -196,8 +197,9 @@ The rules file is user-controlled input and the scanner walks raw bytes, so:
   (`ScalarTable.htmlEscaped`), never from `Replacements.all`. A user rule
   outputting `<b>` must land in the clipboard's HTML flavour as text, not
   markup.
-- Plain and attributed text share one scanner; `FuzzTests` asserts they agree
-  on every input, so RTF can never diverge from plain text.
+- Plain, attributed, HTML and RTF text share one scanner; `FuzzTests` asserts
+  the attributed and RTF paths agree with plain text on every input, so no
+  flavour can diverge from another.
 - `FuzzTests` throws seeded garbage at the parser (only `ParseError` may come
   back) and the scanner (never a crash, never a read past the end). Replay a
   failure from its seed.

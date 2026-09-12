@@ -8,6 +8,7 @@
 //  end, never a different error type.
 //
 
+import AppKit
 import Foundation
 import Testing
 @testable import PasteBopCore
@@ -71,7 +72,8 @@ private enum Fuzz {
         var replacements: [Replacement] = []
         for _ in 0..<Int.random(in: 0...12, using: &rng) {
             let output = pick(outputs, &rng)
-            let pattern: Pattern
+            // Qualified: AppKit and Testing both surface a Pattern of their own.
+            let pattern: PasteBopCore.Pattern
             switch Int.random(in: 0...3, using: &rng) {
             case 0:
                 let value = pick(interestingScalars.filter { $0 >= 0xA0 }, &rng)
@@ -158,6 +160,65 @@ struct FuzzTests {
         // Both paths share one scanner; a disagreement means the UTF-16
         // offset translation is wrong.
         #expect(attributed?.string == plain, "seed \(seed)")
+    }
+
+    @Test("RTF and plain text always agree", arguments: 0..<120)
+    func rtfMatchesPlain(seed: Int) {
+        var rng = SeededGenerator(seed: UInt64(seed) &+ 7000)
+        let rules = Fuzz.rules(&rng)
+        // AppKit's RTF reader silently drops the bidi override, so a document
+        // holding one cannot be compared through it.
+        var input = Fuzz.text(&rng, length: Int.random(in: 1...48, using: &rng))
+        input.unicodeScalars.removeAll { $0.value == 0x202E }
+
+        // Styling every other few characters puts control words between the
+        // escapes, which is where a splice can go wrong. Chunked by scalar, so
+        // a style change never lands inside a surrogate pair.
+        let styled = NSMutableAttributedString(string: input)
+        let bold = NSFont.boldSystemFont(ofSize: 12)
+        var scalars = input.unicodeScalars[...]
+        var location = 0
+        var isBold = false
+        while !scalars.isEmpty {
+            let chunk = scalars.prefix(Int.random(in: 1...5, using: &rng))
+            let length = chunk.reduce(0) { $0 + $1.utf16.count }
+            if isBold {
+                styled.addAttribute(.font, value: bold, range: NSRange(location: location, length: length))
+            }
+            location += length
+            scalars = scalars.dropFirst(chunk.count)
+            isBold.toggle()
+        }
+        let whole = NSRange(location: 0, length: styled.length)
+        guard let rtf = styled.rtf(from: whole, documentAttributes: [:]),
+              NSAttributedString(rtf: rtf, documentAttributes: nil)?.string == input else {
+            return  // AppKit did not round-trip the sample; nothing to compare against.
+        }
+
+        let expected = TextNormalizer.normalized(input, rules: rules)
+        let rewritten = RTFTextRewriter.rewrite(rtf, rules: rules)
+        let actual = rewritten.flatMap { NSAttributedString(rtf: $0, documentAttributes: nil)?.string }
+        #expect((actual ?? input) == expected, "seed \(seed)")
+    }
+
+    @Test("The RTF rewriter never crashes", arguments: 0..<200)
+    func rtfSurvivesGarbage(seed: Int) {
+        var rng = SeededGenerator(seed: UInt64(seed) &+ 9000)
+        let rules = Fuzz.rules(&rng)
+        let fragments = [
+            "{", "}", "\\", "\\'93", "\\'9", "\\'zz", "\\u8220 ", "\\u-10179 ", "\\u55357 ", "\\uc1", "\\uc0",
+            "\\f1", "\\f0 ", "\\bin3 abc", "\\bin999", "\\emdash", "\\~", "\\*", "\\fonttbl", "\\fcharset128",
+            "\\dbch", "\\loch", "\\pard", "\\par", "\\ansicpg932", "\\mac", "text", " ", "\r\n", "\\{", "\\}",
+            "{\\*\\x", "{\\pict", "{\\fonttbl{\\f0\\fcharset0 A;}}",
+        ]
+        var document = seed.isMultiple(of: 2) ? "{\\rtf1\\ansi" : ""
+        for _ in 0..<Int.random(in: 0...40, using: &rng) {
+            document += Bool.random(using: &rng) ? Fuzz.pick(fragments, &rng) : Fuzz.bytes(&rng, length: 3)
+        }
+        _ = RTFTextRewriter.rewrite(Data(document.utf8), rules: rules)
+        _ = RTFTextRewriter.rewrite(Data((0..<Int.random(in: 0...64, using: &rng)).map { _ in
+            UInt8.random(in: 0...255, using: &rng)
+        }), rules: rules)
     }
 
     @Test("A rewrite is never applied twice to its own output when rules are self-stable")

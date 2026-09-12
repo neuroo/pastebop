@@ -234,8 +234,10 @@ text.
 HTML and RTF next to the plain text. PasteBop rewrites all of them, so the
 result is the same wherever you paste:
 
-- **RTF/RTFD** is decoded, its characters rewritten, and re-encoded with every
-  font, colour and style run preserved.
+- **RTF** is rewritten in place: only the escaped characters (`\'93`, `\uN`,
+  `\emdash`) are decoded and replaced, so every font, colour and style run —
+  and any formatting a Cocoa round-trip would have re-encoded — stays byte for
+  byte. RTFD, the flavour with attachments, goes through AppKit instead.
 - **HTML** is split into markup and text, and *only text nodes* are rewritten.
   Attribute values, comments and `<script>`/`<style>` bodies are untouched —
   turning `«` into `"` inside `title="«x»"` would break the attribute. Markup
@@ -306,13 +308,15 @@ PASTEBOP_BENCHMARK=1 swift test -c release --filter Throughput
 A typical clipboard is a few kilobytes, so a pass costs microseconds against a
 100 ms budget.
 
-Rewriting styled text is slower, because decoding and re-encoding RTF is
-AppKit's work rather than the scanner's: roughly 4 MB/s against the scanner's
-hundreds. Anything past 256 KB is therefore handed to a background queue. The
-clipboard never waits for it; the Services entry does, because the system reads
-the pasteboard the instant it returns, and gives up after five seconds rather
-than looking like a hang. Measured through the real Services dispatch: a 1 MB
-styled selection round-trips in 338 ms, an 8 MB one in 2.5 s.
+Styled text is handled at the same level: RTF is walked as bytes, the escaped
+characters are decoded and scanned, and the matches spliced back, at about
+200 MB/s for a Cocoa document — fifty times what decoding and re-encoding it
+through AppKit cost. Anything past 256 KB is still handed to a background
+queue. The clipboard never waits for it; the Services entry does, because the
+system reads the pasteboard the instant it returns, and gives up after five
+seconds rather than looking like a hang. Measured through the real Services
+dispatch: a 1.2 MB styled selection round-trips in 33 ms and a 9.7 MB one in
+106 ms, down from 311 ms and 2.2 s through AppKit.
 
 ## Linting
 

@@ -15,7 +15,7 @@ rather than guessing.
 PASTEBOP_BENCHMARK=1 swift test -c release --filter Throughput
 ```
 
-Five profiles, because they stress different paths:
+Six profiles, because they stress different paths:
 
 | Profile | Exercises | Current |
 | --- | --- | --- |
@@ -24,6 +24,7 @@ Five profiles, because they stress different paths:
 | ai prose | the real workload: mostly ASCII, some hits | ~700 MB/s |
 | cjk | three-byte decode + miss on every scalar | ~380 MB/s |
 | all rewrites | the output-building path | ~170 MB/s |
+| rtf | the RTF splice over a Cocoa document, bytes in and out | ~200 MB/s |
 
 **Always run release mode.** Debug is roughly 10x slower and hides which path
 is actually hot. Record the numbers before your change and after.
@@ -40,16 +41,18 @@ is actually hot. Record the numbers before your change and after.
 - `ScalarTable` is a value fetched once per scan, not a namespace of
   `static let`s, because a lazy global costs a `swift_once` check per access.
 
-## The slow path is styled text
+## Styled text
 
-The scanner is not the bottleneck for RTF; AppKit's decode and re-encode are,
-at roughly 4 MB/s. Two rules follow:
+RTF is bytes, not an `NSAttributedString`: `RTFTextRewriter` decodes the text
+tokens, runs the scanner over them, and splices the matches back over the
+source, at about 200 MB/s. Do not route `.rtf` through AppKit again; the
+round trip alone is 20 MB/s, and it rewrites formatting it does not model.
+Two rules remain:
 
-- Build the rewritten `NSAttributedString` in **one forward pass**. A
-  `replaceCharacters` per rewrite is quadratic and turns 17 MB into minutes.
-- Anything past `inlineTextBytes` goes to a queue. Never do megabytes of RTF
-  on the main thread: for the Services entry that freezes the app the user is
-  typing in, not just PasteBop.
+- RTFD still goes through `NSAttributedString`. Build the rewritten string in
+  **one forward pass**; a `replaceCharacters` per rewrite is quadratic.
+- Anything past `inlineTextBytes` goes to a queue. For the Services entry that
+  matters because the app the user is typing in waits on the answer.
 
 Measure the real thing through the real dispatch, not just the library call:
 

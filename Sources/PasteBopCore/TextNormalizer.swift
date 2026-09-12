@@ -73,6 +73,20 @@ public enum TextNormalizer {
         }
     }
 
+    /// Every match in `utf8`, in order, for rewriters that splice into another
+    /// encoding. The same scanner as `normalize`, so they cannot drift from it.
+    static func forEachRewrite(
+        in utf8: UnsafeBufferPointer<UInt8>,
+        using table: ScalarTable,
+        _ body: (_ range: Range<Int>, _ replacement: String) -> Void
+    ) {
+        var cursor = 0
+        while let hit = nextRewrite(in: utf8, from: cursor, using: table) {
+            body(hit.index..<hit.end, hit.replacement)
+            cursor = hit.end
+        }
+    }
+
     // MARK: - Attributed text
 
     /// Keeps the styling.

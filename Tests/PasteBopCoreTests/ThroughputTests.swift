@@ -11,6 +11,7 @@
 //  The bounded regression tripwires live in TextNormalizerTests.
 //
 
+import AppKit
 import Foundation
 import Testing
 @testable import PasteBopCore
@@ -33,6 +34,39 @@ struct ThroughputTests {
         // Pathological: every scalar is a rewrite.
         ("all rewrites", "\u{2014}\u{201C}\u{201D}\u{2026}\u{2022}"),
     ]
+
+    @Test("RTF throughput", .enabled(if: isEnabled))
+    func rtfThroughput() {
+        // A styled document the size of a long article, as Cocoa writes it.
+        let unit = "The \u{201C}quick\u{201D} brown fox jumped over the lazy dog\u{2014}again\u{2026} "
+        let styled = NSMutableAttributedString()
+        let bold: [NSAttributedString.Key: Any] = [.font: NSFont.boldSystemFont(ofSize: 12)]
+        for position in 0..<((2 << 20) / unit.utf8.count) {
+            let attributes = position.isMultiple(of: 2) ? [:] : bold
+            styled.append(NSAttributedString(string: unit, attributes: attributes))
+        }
+        let whole = NSRange(location: 0, length: styled.length)
+        guard let rtf = styled.rtf(from: whole, documentAttributes: [:]) else {
+            Issue.record("AppKit could not write the sample")
+            return
+        }
+
+        var best = Duration.seconds(1000)
+        for _ in 0..<3 {
+            let started = ContinuousClock.now
+            let result = RTFTextRewriter.rewrite(rtf)
+            best = min(best, ContinuousClock.now - started)
+            _ = result
+        }
+        let seconds = Double(best.components.attoseconds) / 1e18 + Double(best.components.seconds)
+        print(String(
+            format: "  %@ %7.1f MB/s   (%.3f ms for %d KB)",
+            "rtf".padding(toLength: 16, withPad: " ", startingAt: 0),
+            Double(rtf.count) / seconds / 1_048_576,
+            seconds * 1000,
+            rtf.count / 1024
+        ))
+    }
 
     @Test("Scanner throughput", .enabled(if: isEnabled), arguments: profiles)
     func throughput(profile: (name: String, unit: String)) {

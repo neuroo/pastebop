@@ -295,9 +295,7 @@ public enum PasteboardNormalizer {
             return Data(rewritten.utf8)
 
         case .rtf:
-            guard let styled = NSAttributedString(rtf: data, documentAttributes: nil),
-                  let rewritten = TextNormalizer.normalize(styled, rules: rules) else { return nil }
-            return rewritten.rtf(from: rewritten.fullRange, documentAttributes: [:])
+            return RTFTextRewriter.rewrite(data, rules: rules)
 
         case .rtfd:
             guard let styled = NSAttributedString(rtfd: data, documentAttributes: nil),
