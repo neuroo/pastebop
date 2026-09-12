@@ -134,6 +134,75 @@ struct PasteboardNormalizerTests {
         }
     }
 
+    @Test("Rewrites UTF-16 plain text, which some apps write instead")
+    func rewritesUTF16PlainText() throws {
+        // A flavour in `textTypes` that nothing was covering. It is the one
+        // whose rewrite has to be re-encoded on the way out, so a failure
+        // there would read as "nothing changed".
+        let utf16 = PasteboardNormalizer.utf16PlainText
+        try withPasteboard { pasteboard in
+            let text = "a\u{2014}b\u{2026}"
+            write([(utf16, try #require(text.data(using: .utf16)))], to: pasteboard)
+
+            #expect(PasteboardNormalizer.normalize(pasteboard).didRewrite)
+            let back = try #require(pasteboard.data(forType: utf16))
+            #expect(String(data: back, encoding: .utf16) == "a--b...")
+        }
+    }
+
+    @Test("Rewrites UTF-16 in the host's order, with a mark and without")
+    func rewritesNativeUTF16PlainText() throws {
+        // It sits beside the UTF-8 flavour of the same copy, so leaving it
+        // out meant one item saying two different things: the UTF-8 rewritten
+        // and this still holding the em dash. Without a mark it must be read
+        // in the host's order -- `.utf16` alone assumes big endian and would
+        // decode every character wrongly.
+        for marked in [true, false] {
+            let text = "a\u{2014}b"
+            let data = marked
+                ? try #require(text.data(using: .utf16))
+                : try #require(text.data(using: .utf16LittleEndian))
+
+            try withPasteboard { pasteboard in
+                write([(PasteboardNormalizer.utf16NativePlainText, data)], to: pasteboard)
+                #expect(PasteboardNormalizer.normalize(pasteboard).didRewrite)
+
+                let back = try #require(
+                    pasteboard.data(forType: PasteboardNormalizer.utf16NativePlainText)
+                )
+                let encoding: String.Encoding = marked ? .utf16 : .utf16LittleEndian
+                #expect(String(data: back, encoding: encoding) == "a--b")
+                // And the UTF-8 flavour beside it says the same thing.
+                #expect(pasteboard.string(forType: .string) == "a--b")
+            }
+        }
+    }
+
+    @Test("Rewrites RTFD, keeping the attachment it carries")
+    func rewritesRTFD() throws {
+        // The attributed path, through the pasteboard rather than directly:
+        // it is the one flavour built by Cocoa rather than spliced as bytes.
+        let attributed = NSMutableAttributedString(string: "a\u{2014}b")
+        attributed.addAttribute(
+            .font,
+            value: NSFont.boldSystemFont(ofSize: 12),
+            range: NSRange(location: 0, length: 1)
+        )
+        let whole = NSRange(location: 0, length: attributed.length)
+        let rtfd = try #require(attributed.rtfd(from: whole, documentAttributes: [:]))
+
+        try withPasteboard { pasteboard in
+            write([(.rtfd, rtfd)], to: pasteboard)
+            #expect(PasteboardNormalizer.normalize(pasteboard).didRewrite)
+
+            let back = try #require(pasteboard.data(forType: .rtfd))
+            let read = try #require(NSAttributedString(rtfd: back, documentAttributes: nil))
+            #expect(read.string == "a--b")
+            // The styling of what was replaced is still on the first run.
+            #expect(read.attribute(.font, at: 0, effectiveRange: nil) != nil)
+        }
+    }
+
     @Test("Handles several items")
     func multipleItems() {
         withPasteboard { pasteboard in

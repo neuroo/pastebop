@@ -26,6 +26,41 @@ public enum PasteboardWork {
     /// that a pathological one does not look like a hang.
     public static let deadline: TimeInterval = 5
 
+    /// How much text is worth rewriting on the main thread.
+    ///
+    /// The default table costs a flat few nanoseconds a byte and puts out no
+    /// more than it matched, so the whole 256 KB is fine. A customised one
+    /// can be far more expensive in two independent ways, and the budget
+    /// shrinks for each. The work still happens, just off the main thread.
+    ///
+    /// Substrings sharing a first scalar are tried one after another wherever
+    /// it appears, and each is compared until it fails — so the cost is the
+    /// total *length* of the largest such group, which counting the rules
+    /// misses entirely. Two thousand of them sharing a long prefix measured
+    /// 148 ms of main thread at a budget set by their number alone.
+    ///
+    /// A replacement can also be far longer than what it matched — up to
+    /// `RuleFile.Limits.replacementScalars` for one scalar, measured at 341
+    /// times the input — and the rewrite is built inline, so the budget has
+    /// to bound what the main thread allocates and not only what it reads.
+    ///
+    /// The floor is small on purpose. A table this expensive should send
+    /// *everything* to the queue: a dispatch costs microseconds against the
+    /// milliseconds a single kilobyte would take inline.
+    static func inlineBudget(for rules: RewriteRules) -> Int {
+        var budget = PasteboardNormalizer.inlineTextBytes
+
+        let scan = rules.table.worstSequenceScan
+        if scan > 32 { budget /= scan / 32 }
+
+        // Three bytes is the common matched scalar, so a replacement wider
+        // than that is where a rewrite starts growing rather than shrinking.
+        let widest = rules.table.widestOutput
+        if widest > 3 { budget /= widest / 3 }
+
+        return max(64, budget)
+    }
+
     /// Rewrites a clipboard change without ever blocking the main thread.
     ///
     /// Small payloads are done inline so the common copy is rewritten before
@@ -35,6 +70,7 @@ public enum PasteboardWork {
     public static func normalizeClipboard(
         _ pasteboard: NSPasteboard,
         rules: RewriteRules,
+        isCancelled: @escaping @MainActor () -> Bool = { false },
         completion: @escaping @MainActor (PasteboardNormalizer.Outcome) -> Void
     ) {
         let snapshot = PasteboardNormalizer.snapshot(pasteboard)
@@ -46,7 +82,7 @@ public enum PasteboardWork {
             return
         }
 
-        if snapshot.textBytes <= PasteboardNormalizer.inlineTextBytes {
+        if snapshot.textBytes <= inlineBudget(for: rules) {
             let rewrite = PasteboardNormalizer.rewrite(snapshot, rules: rules)
             completion(PasteboardNormalizer.apply(rewrite, to: pasteboard, from: snapshot))
             return
@@ -56,6 +92,10 @@ public enum PasteboardWork {
         // queue is the snapshot and this closure, which is main-actor isolated
         // and so can hold the pasteboard safely.
         let finish: @MainActor (PasteboardNormalizer.Rewrite) -> Void = { rewrite in
+            // Before the write, not after it. Monitoring can stop while this
+            // is on the queue, and applying then puts text on the clipboard
+            // of an app the user has just switched off.
+            guard !isCancelled() else { return }
             completion(PasteboardNormalizer.apply(rewrite, to: pasteboard, from: snapshot))
         }
         queue.async {
@@ -119,7 +159,9 @@ public enum PasteboardWork {
         as type: NSPasteboard.PasteboardType,
         rules: RewriteRules
     ) -> Data? {
-        if data.count <= PasteboardNormalizer.inlineTextBytes {
+        // The same budget the clipboard path uses. A flat ceiling here held
+        // the main thread for seconds on a table this one dispatches.
+        if data.count <= inlineBudget(for: rules) {
             return PasteboardNormalizer.rewrite(data, as: type, rules: rules)
         }
         let box = DataBox()

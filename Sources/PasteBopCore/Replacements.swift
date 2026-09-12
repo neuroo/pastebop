@@ -309,7 +309,10 @@ public enum Replacements {
         Replacement(0xFFF9, "", "INTERLINEAR ANNOTATION ANCHOR", .invisibles),
         Replacement(0xFFFA, "", "INTERLINEAR ANNOTATION SEPARATOR", .invisibles),
         Replacement(0xFFFB, "", "INTERLINEAR ANNOTATION TERMINATOR", .invisibles),
-        Replacement(0xFFFC, "", "OBJECT REPLACEMENT CHARACTER", .invisibles),
+        // U+FFFC, OBJECT REPLACEMENT CHARACTER, is deliberately absent. It
+        // is where an attachment sits in attributed text, so deleting it
+        // deletes the image or file the person copied -- silently, and with
+        // nothing left to paste. Invisible is not the same as meaningless.
         Replacement(0xFEFF, "", "ZERO WIDTH NO-BREAK SPACE (BOM)", .invisibles),
         // Invisible, carry no text, and the usual vehicle for smuggling hidden
         // instructions inside copied text, so the whole block goes.

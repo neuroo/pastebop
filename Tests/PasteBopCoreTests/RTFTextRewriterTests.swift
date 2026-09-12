@@ -37,6 +37,43 @@ struct RTFTextRewriterTests {
         \f0\fs24 \cf0 Plain \'93quoted\'94 \'97 it\'92s\'85 zw\uc0\u8203 sp caf\'e9 \u8594  end}
         """#
 
+    @Test("A later \\uc does not change how a replacement is written", arguments: [
+        "{\\rtf1\\ansi\\uc1 \\'22xy}",
+        "{\\rtf1\\ansi\\uc2 \\'22xy}",
+        "{\\rtf1\\ansi \\'22xy\\uc2 }",
+    ])
+    func fallbackCountMatchesThePositionNotTheEnd(_ rtf: String) throws {
+        // The escape is written with the skip count in force when the run is
+        // flushed. A \uc later in the run put the wrong number of fallback
+        // characters after \uN, and the surplus was read as literal text —
+        // "éy" came back as "é?y".
+        let table = try rules(#"  U+0022 U+0078: "\#u{00E9}""#)
+        let out = try #require(RTFTextRewriter.rewrite(Data(rtf.utf8), rules: table))
+        let read = try #require(NSAttributedString(rtf: out, documentAttributes: nil)).string
+        #expect(read == "\u{00E9}y")
+    }
+
+    @Test("A substring rule does not match across a paragraph break", arguments: [
+        "\\par", "\\line", "\\cell", "\\row", "\\sect", "\\page",
+    ])
+    func substringsDoNotCrossSeparators(_ separator: String) throws {
+        // Matching across one joins words that were never adjacent: the run
+        // was replaced at the first half and the second half deleted, so
+        // "foo<break>bar" came back as "X<break>" with bar gone.
+        let table = try rules(#"  U+0066 U+006F U+006F U+0062 U+0061 U+0072: "X""#)
+        let rtf = "{\\rtf1\\ansi foo\(separator) bar}"
+        #expect(RTFTextRewriter.rewrite(Data(rtf.utf8), rules: table) == nil)
+    }
+
+    @Test("A substring rule still matches across formatting")
+    func substringsCrossFormatting() throws {
+        // Bold in the middle of a word is formatting, not a boundary.
+        let table = try rules(#"  U+0066 U+006F U+006F U+0062 U+0061 U+0072: "X""#)
+        let rtf = "{\\rtf1\\ansi foo\\b bar}"
+        let out = try #require(RTFTextRewriter.rewrite(Data(rtf.utf8), rules: table))
+        #expect(try #require(String(bytes: out, encoding: .utf8)).contains("X"))
+    }
+
     @Test("Rewrites only the text of a Cocoa document")
     func cocoaDocument() {
         let result = rewrite(Self.cocoa)

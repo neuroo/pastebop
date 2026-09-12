@@ -97,6 +97,9 @@ enum RTFSyntax {
         ("bullet", 0x2022), ("emspace", 0x2003), ("enspace", 0x2002), ("qmspace", 0x2005),
         ("zwbo", 0x200B), ("zwnbo", 0xFEFF), ("zwj", 0x200D), ("zwnj", 0x200C),
         ("ltrmark", 0x200E), ("rtlmark", 0x200F),
+        // A tab is text. Left undecoded it is invisible to the matcher, so a
+        // substring rule reads "foo\tab bar" as "foobar" and eats the rest.
+        ("tab", 0x0009),
     ]
 
     static func namedCharacter(_ source: UnsafeBufferPointer<UInt8>, _ word: ControlWord) -> UInt32? {

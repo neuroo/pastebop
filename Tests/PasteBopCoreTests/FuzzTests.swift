@@ -206,6 +206,25 @@ struct FuzzTests {
         #expect((actual ?? input) == expected, "seed \(seed)")
     }
 
+    @Test("HTML and plain text always agree", arguments: 0..<200)
+    func htmlMatchesPlain(seed: Int) {
+        // The flavour both divergence bugs were in, and the one most of the
+        // audience actually pastes: text copied out of a browser. It was only
+        // ever fuzzed for not crashing, which neither would have caught.
+        var rng = SeededGenerator(seed: UInt64(seed) &+ 9000)
+        let rules = Fuzz.rules(&rng)
+        let input = Fuzz.text(&rng, length: Int.random(in: 1...48, using: &rng))
+
+        // Markup characters would make the sample mean something different to
+        // the two: `<` opens a tag, and `&mdash;` is an em dash to one reader
+        // and seven letters to the other. That divergence is the feature.
+        guard !input.contains(where: { "<>&".contains($0) }) else { return }
+
+        let expected = TextNormalizer.normalize(input, rules: rules, escaping: .html)
+        let rewritten = HTMLTextRewriter.rewrite("<p>\(input)</p>", rules: rules)
+        #expect(rewritten == expected.map { "<p>\($0)</p>" }, "seed \(seed)")
+    }
+
     @Test("The RTF rewriter never crashes", arguments: 0..<200)
     func rtfSurvivesGarbage(seed: Int) {
         var rng = SeededGenerator(seed: UInt64(seed) &+ 9000)
