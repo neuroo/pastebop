@@ -60,27 +60,6 @@
 			<key>NSRequiredContext</key>
 			<dict/>
 		</dict>
-		<dict>
-			<!-- No return types, so macOS offers it on selections that cannot
-			     be edited: a web page, a PDF, someone else's document. The
-			     result goes to the clipboard instead of back to the view. -->
-			<key>NSMenuItem</key>
-			<dict>
-				<key>default</key>
-				<string>PasteBop/CopyBlop</string>
-			</dict>
-			<key>NSMessage</key>
-			<string>copyBlop</string>
-			<key>NSPortName</key>
-			<string>PasteBop</string>
-			<key>NSSendTypes</key>
-			<array>
-				<string>public.rtf</string>
-				<string>public.utf8-plain-text</string>
-			</array>
-			<key>NSRequiredContext</key>
-			<dict/>
-		</dict>
 	</array>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>

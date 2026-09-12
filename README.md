@@ -65,32 +65,21 @@ Statistics ▸  Since 11 Sep 2026
 **About PasteBop** opens a Help window with the full table and a **Try it**
 button that copies a messy sample so you can watch it get cleaned.
 
-## Without copying: SelectBlop and CopyBlop
+## Without copying: SelectBlop
 
-Select text in any app, right-click, and look under **Services → PasteBop**:
+Select text in any app, right-click, and choose **Services → PasteBop →
+SelectBlop**. The selection is rewritten in place. Nothing goes through the
+clipboard, so whatever you had copied stays copied.
 
-| | |
-| --- | --- |
-| **SelectBlop** | rewrites the selection in place |
-| **CopyBlop** | puts a cleaned copy on the clipboard, leaving the original alone |
+It works on styled text too: select a paragraph in Pages or TextEdit and the
+fonts, colours and links survive, only the characters change. Files and links
+are refused, because their text is an address and an address has to stay
+exactly what it was.
 
-SelectBlop never touches the clipboard, so whatever you had copied stays
-copied. CopyBlop is for text you cannot edit — a web page, a PDF, someone
-else's document — where writing back is not an option.
-
-macOS decides which one it offers. A service that hands text back can only
-apply where the text is editable, so it asks the view first
-(`validRequestorForSendType:returnType:`) and hides SelectBlop when the answer
-is no. Apps answer that inconsistently, which is exactly why CopyBlop exists:
-it hands nothing back, so it is always available. PasteBop itself cannot tell
-the difference — a service is given a pasteboard and no reference to where the
-text came from.
-
-Both work on styled text: select a paragraph in Pages or TextEdit and the
-fonts, colours and links survive, only the characters change. CopyBlop also
-puts a plain-text version on the clipboard so it still pastes into a terminal.
-Files and links are refused, because their text is an address and an address
-has to stay exactly what it was.
+macOS only offers it where the text is editable: a service that hands text
+back asks the view first, and hides itself when the answer is no. On a web
+page or a PDF, copy the text instead — PasteBop cleans the clipboard anyway,
+which is the whole point of it.
 
 macOS only scans for Services in applications it knows about, so PasteBop has
 to be in `/Applications` for the menu item to appear. If it does not show up,

@@ -271,17 +271,6 @@ public enum PasteboardNormalizer {
     /// styled form keeps the user's formatting.
     static let selectionTypes: [NSPasteboard.PasteboardType] = [.rtf, .rtfd, .html, .string]
 
-    /// The plain text inside a styled flavour, so a rich selection can also
-    /// be pasted somewhere that only takes text.
-    static func plainText(from data: Data, as type: NSPasteboard.PasteboardType) -> String? {
-        switch type {
-        case .string: String(data: data, encoding: .utf8)
-        case .rtf: NSAttributedString(rtf: data, documentAttributes: nil)?.string
-        case .rtfd: NSAttributedString(rtfd: data, documentAttributes: nil)?.string
-        default: nil
-        }
-    }
-
     /// `nil` for flavours that are not text or need no change.
     static func rewrite(
         _ data: Data,
