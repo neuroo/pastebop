@@ -88,7 +88,6 @@ anything AppKit does not model stay byte-identical. Only RTFD goes through
 | --- | --- |
 | `UserDefaults` | settings and statistics: enabled, copy count, tally, counting-since |
 | `~/Library/Application Support/PasteBop/rules.yaml` | the rewrite table, user editable, watched for changes |
-| `~/Library/Application Support/PasteBop/update-state.json` | when updates were last checked, and the newest release the user has been told about |
 
 Settings belong in `UserDefaults`. Application Support is for state a user
 might reasonably open, edit or delete by hand, so it is readable JSON with
@@ -225,18 +224,6 @@ mappings would be accurate and unusable.
 
 Round-tripping is tested: encode, decode, and the result must equal the table
 you started with; re-encoding must be byte-stable.
-
-## Updates
-
-A weekly background check plus a manual one from the menu. It never installs
-anything: builds are ad-hoc signed, so replacing the binary behind the user's
-back is exactly the thing signing is meant to stop. The scheduled check is
-silent unless there is news and never repeats itself; the manual one always
-reports, because the user just asked.
-
-Checks need a public repository. GitHub answers 404 for anonymous requests to
-a private one, which is surfaced as a plain-English message rather than a
-mystery failure.
 
 ## Dependencies
 

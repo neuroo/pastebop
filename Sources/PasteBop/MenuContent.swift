@@ -10,7 +10,6 @@ import SwiftUI
 struct MenuContent: View {
 
     @Bindable var model: AppModel
-    let updates: UpdateChecker
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
@@ -66,11 +65,6 @@ struct MenuContent: View {
         }
 
         Divider()
-
-        Button(updates.isChecking ? "Checking\u{2026}" : "Check for Updates\u{2026}") {
-            Task { await updates.check(.manual) }
-        }
-        .disabled(updates.isChecking)
 
         Button("About PasteBop\u{2026}") {
             AboutWindow.show(using: openWindow)
