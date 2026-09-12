@@ -1,5 +1,5 @@
 //
-//  SelectionServices.swift
+//  SelectBopService.swift
 //  PasteBop
 //
 
@@ -22,7 +22,7 @@ import PasteBopCore
 /// Runs whether or not clipboard watching is switched on: choosing the menu
 /// item is an explicit request, not something happening behind the user.
 @MainActor
-final class SelectBlopService: NSObject {
+final class SelectBopService: NSObject {
 
     /// Read at call time, so an edit to the rules file applies immediately.
     private let rules: () -> RewriteRules
@@ -34,7 +34,7 @@ final class SelectBlopService: NSObject {
     /// Replaces the selection. Named by `NSMessage` in Info.plist; renaming it
     /// breaks the menu item, which is why `Scripts/verify-release.sh` checks.
     @objc
-    func selectBlop(
+    func selectBop(
         _ pasteboard: NSPasteboard,
         userData: String?,
         error: AutoreleasingUnsafeMutablePointer<NSString>

@@ -35,14 +35,14 @@
 	<key>NSServices</key>
 	<array>
 		<dict>
-			<!-- A slash makes the Services menu nest it: PasteBop > SelectBlop. -->
+			<!-- A slash makes the Services menu nest it: PasteBop > SelectBop. -->
 			<key>NSMenuItem</key>
 			<dict>
 				<key>default</key>
-				<string>PasteBop/SelectBlop</string>
+				<string>PasteBop/SelectBop</string>
 			</dict>
 			<key>NSMessage</key>
-			<string>selectBlop</string>
+			<string>selectBop</string>
 			<key>NSPortName</key>
 			<string>PasteBop</string>
 			<!-- Declaring return types as well as send types is what makes the

@@ -115,6 +115,29 @@ characters are boxed, and the menu lines all come from the real table and a
 real `ActivityReport`, so the demo cannot claim something the app does not do.
 Re-run it whenever the menu wording or the table changes.
 
+## Polling
+
+`changeCount` costs 0.8 µs to read; the cost of a poll is the wakeup. The
+timer is a flat 100 ms with 25 ms leeway (`ClipboardMonitor.pollInterval`):
+under human reaction time, so the rewrite lands before the fastest
+copy-then-paste, with a 125 ms worst case. Do not add adaptive back-off. A
+slower idle band opens a race the user can see in same-app copy-and-paste
+(chat tab to mail tab in one browser), and what it would save does not
+register: at ten fires a second the app bills under half a milliwatt and
+0.005 % of a core.
+
+What keeps ten polls a second free is never doing the same work twice. A poll
+that finds the count unchanged touches nothing else. A change is claimed
+before the scan starts, so later ticks do not re-read a large document being
+rewritten off the main thread. The count produced by our own write is adopted
+from the outcome, so the rewritten text is not scanned again.
+
+**Measuring:** `Scripts/measure-idle.sh [seconds]` against the installed app.
+It reads `proc_pid_rusage` for the running process — timer fires (interrupt
+wakeups), CPU time, cycles, instructions and billed energy — all charged to
+PasteBop alone, so the figures hold on a busy machine. Do not use `top`'s
+`IDLEW`: it counts wakeups *from package idle* and reads zero for every
+variant the moment anything else keeps the CPU awake.
 ## Provenance
 
 `Provenance` guesses where a copy came from out of `RewriteTally` and the
@@ -147,7 +170,7 @@ to a queue and *waits*, because the system reads the pasteboard the moment the
 handler returns and there is nowhere to hand a late answer. The wait has a five
 second deadline; past it the selection is left alone.
 
-**SelectBlop** declares `NSReturnTypes`, so macOS replaces the selection with
+**SelectBop** declares `NSReturnTypes`, so macOS replaces the selection with
 what comes back, and only offers it where the responder says the text is
 editable. The app cannot detect editability itself: a service provider gets a
 pasteboard and nothing else. A send-only companion for read-only text was

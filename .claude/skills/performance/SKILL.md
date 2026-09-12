@@ -59,10 +59,27 @@ swift - <<'EOF'
 import AppKit
 let pb = NSPasteboard(name: .init("probe"))
 pb.clearContents(); pb.setString("a\u{2014}b", forType: .string)
-print(NSPerformService("PasteBop/SelectBlop", pb), pb.string(forType: .string) ?? "")
+print(NSPerformService("PasteBop/SelectBop", pb), pb.string(forType: .string) ?? "")
 EOF
 ```
 
+## The poll timer
+
+A `changeCount` read is 0.8 µs; wakeups are the cost. The timer is a flat
+100 ms with 25 ms leeway (`ClipboardMonitor.pollInterval`), chosen because it
+is under human reaction time: a same-app copy is rewritten within 125 ms worst
+case. Do not add adaptive back-off; ten fires a second bill under half a milliwatt, and a
+slower idle band opens a race the user can see. The poll stays free because
+no work is repeated: an unchanged count ends the poll, a change is claimed
+before the scan, and the count our own write produces is adopted.
+
+Measure with `Scripts/measure-idle.sh 60` against the installed app: it reads
+the kernel's per-process accounting (`proc_pid_rusage`), so timer fires, CPU
+time and billed energy are exact whatever else the machine is doing. Do not
+use `top`'s `IDLEW`: it counts wakeups *from package idle* and reads 0 for
+every variant on a busy machine. For latency, write curly text to the
+pasteboard and watch `changeCount` at 1 ms until the ASCII appears; expect an
+even spread between 0 and 125 ms (measured: 7–98 ms, median 63) and no second bump of the count afterwards.
 ## Rules
 
 - Do not add a branch to `nextRewrite` for a feature that is not needed on
@@ -71,6 +88,6 @@ EOF
   iteration for readability. It was measured; it is 200x.
 - The bounded tripwires in `TextNormalizerTests` catch a collapse, not a 2x
   regression. They are not a substitute for reading the benchmark.
-- A clipboard is usually a few kilobytes against a 250 ms poll budget, so do
+- A clipboard is usually a few kilobytes against a 100 ms poll budget, so do
   not trade correctness or clarity for speed that no user can perceive. If a
   change makes the code harder to follow for less than a 2x gain, drop it.

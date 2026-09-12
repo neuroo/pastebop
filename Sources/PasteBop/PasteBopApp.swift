@@ -63,7 +63,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         currentVersion: Bundle.main.shortVersion
     )
 
-    private lazy var service = SelectBlopService { [model] in model.rules }
+    private lazy var service = SelectBopService { [model] in model.rules }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         model.start()

@@ -12,11 +12,16 @@ import PasteBopCore
 @MainActor
 final class ClipboardMonitor {
 
-    /// Faster than a human can switch apps and paste.
-    static let pollInterval: TimeInterval = 0.25
+    /// Under human reaction time. Copying and pasting is two chords back to
+    /// back, 150 ms apart at the very fastest; the rewrite has to land before
+    /// the second one. Reading `changeCount` costs under a microsecond, so
+    /// ten a second is nothing -- what a poll costs is the wakeup.
+    static let pollInterval: Duration = .milliseconds(100)
 
-    /// Lets the scheduler coalesce the wakeup with other timers.
-    private static let leeway: DispatchTimeInterval = .milliseconds(100)
+    /// How late the timer may fire, so the kernel can fold the wakeup into
+    /// one it was taking anyway. A quarter of the interval keeps the worst
+    /// case at 125 ms, still under the fastest paste.
+    static let leeway: Duration = .milliseconds(25)
 
     private let pasteboard: NSPasteboard
     /// Swapped in when the rules file changes.
@@ -48,9 +53,9 @@ final class ClipboardMonitor {
 
         let timer = DispatchSource.makeTimerSource(queue: .main)
         timer.schedule(
-            deadline: .now() + Self.pollInterval,
-            repeating: Self.pollInterval,
-            leeway: Self.leeway
+            deadline: .now() + Self.pollInterval.dispatchInterval,
+            repeating: Self.pollInterval.dispatchInterval,
+            leeway: Self.leeway.dispatchInterval
         )
         timer.setEventHandler { [weak self] in
             MainActor.assumeIsolated { self?.poll() }
@@ -77,5 +82,12 @@ final class ClipboardMonitor {
             self.lastChangeCount = outcome.changeCount
             if outcome.didRewrite { self.onRewrite(outcome) }
         }
+    }
+}
+
+private extension Duration {
+    var dispatchInterval: DispatchTimeInterval {
+        let (seconds, attoseconds) = components
+        return .nanoseconds(Int(seconds) * 1_000_000_000 + Int(attoseconds / 1_000_000_000))
     }
 }

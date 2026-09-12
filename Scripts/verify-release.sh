@@ -105,9 +105,9 @@ ARCHS=$(lipo -archs "$VOLUME/PasteBop.app/Contents/MacOS/PasteBop" 2>/dev/null |
 # rename on one side without the other silently removes the menu item.
 SERVICE=$(/usr/libexec/PlistBuddy -c "Print :NSServices:0:NSMessage" "$PLIST" 2>/dev/null \
 	|| echo "missing")
-[[ "$SERVICE" == "selectBlop" ]] \
-	&& pass "SelectBlop service declared" \
-	|| fail "NSServices message is '$SERVICE', expected selectBlop"
+[[ "$SERVICE" == "selectBop" ]] \
+	&& pass "SelectBop service declared" \
+	|| fail "NSServices message is '$SERVICE', expected selectBop"
 
 echo
 if (( FAILURES > 0 )); then
