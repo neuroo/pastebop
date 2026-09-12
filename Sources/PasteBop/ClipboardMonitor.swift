@@ -66,7 +66,14 @@ final class ClipboardMonitor {
     func stop() {
         timer?.cancel()
         timer = nil
+        // Work already dispatched still finishes. Without this it applies to
+        // the clipboard after PasteBop was switched off.
+        generation &+= 1
     }
+
+    /// Bumped when monitoring stops, so work dispatched before then is
+    /// recognised as stale when it comes back.
+    private var generation = 0
 
     private func poll() {
         let changeCount = pasteboard.changeCount
@@ -75,12 +82,21 @@ final class ClipboardMonitor {
         // off the main thread is not picked up again by the next tick.
         lastChangeCount = changeCount
 
-        PasteboardWork.normalizeClipboard(pasteboard, rules: rules) { [weak self] outcome in
-            guard let self else { return }
-            // Our own write bumps the count; adopting it is what stops the loop.
-            self.lastChangeCount = outcome.changeCount
-            if outcome.didRewrite { self.onRewrite(outcome) }
-        }
+        let started = generation
+        PasteboardWork.normalizeClipboard(
+            pasteboard,
+            rules: rules,
+            isCancelled: { [weak self] in started != (self?.generation ?? started + 1) },
+            completion: { [weak self] outcome in
+                guard let self, started == self.generation else { return }
+                // Only a write of our own is worth adopting. A rewrite rejected
+                // because something was copied while it ran reports the *newer*
+                // count, and adopting that would skip the copy that caused it.
+                guard outcome.didRewrite else { return }
+                self.lastChangeCount = outcome.changeCount
+                self.onRewrite(outcome)
+            }
+        )
     }
 }
 
