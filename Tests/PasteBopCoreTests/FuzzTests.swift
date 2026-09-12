@@ -103,7 +103,12 @@ struct FuzzTests {
         case 1: document = Fuzz.text(&rng, length: Int.random(in: 0...200, using: &rng))
         case 2:
             // Mutate a valid file: the most likely real-world breakage.
-            var lines = RuleFile.encode(.builtIn).components(separatedBy: "\n")
+            var lines = RuleFile.encode(RuleOverrides([
+                .scalars(0x2014...0x2014): .off,
+                .scalars(0x2013...0x2013): .output("--"),
+                .scalars(0xE0000...0xE007F): .output(""),
+                .sequence([0x0020, 0x2014, 0x0020]): .output(" - "),
+            ])).components(separatedBy: "\n")
             for _ in 0..<Int.random(in: 1...5, using: &rng) {
                 let line = Int.random(in: 0..<lines.count, using: &rng)
                 let position = Int.random(in: 0...lines[line].count, using: &rng)

@@ -13,6 +13,7 @@ import SwiftUI
 struct AboutView: View {
 
     @Bindable var model: AppModel
+    @Environment(\.openWindow) private var openWindow
     @State private var didCopySample = false
 
     /// Characters cleaned per family, and the largest of them, so every bar
@@ -94,11 +95,11 @@ struct AboutView: View {
     /// it has been edited, or it cannot be read.
     @ViewBuilder
     private var rulesNote: (some View)? {
-        if let failure = model.ruleStore.failure {
+        if let failure = model.ruleStore.failureMessage {
             note(
                 icon: "exclamationmark.triangle.fill",
                 tint: .orange,
-                text: "Rules file: \(failure) Still using the last rules that worked."
+                text: failure
             )
         } else if model.ruleStore.isCustomised {
             note(
@@ -116,7 +117,10 @@ struct AboutView: View {
             Text(text)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 8)
-            Button("Edit\u{2026}") { model.ruleStore.edit() }
+            // The same thing the menu's Edit Rules… does. Before the rules
+            // window existed this opened the file, which now has its own
+            // name everywhere else.
+            Button("Edit Rules\u{2026}") { RulesWindow.show(using: openWindow) }
         }
         .font(.callout)
         .padding(.horizontal, 20)

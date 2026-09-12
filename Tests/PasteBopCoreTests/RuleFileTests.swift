@@ -26,58 +26,116 @@ struct RuleFileTests {
 
     // MARK: - Round trip
 
+    /// One entry of every shape the file can hold.
+    private let sample = RuleOverrides([
+        .scalars(0x2014...0x2014): .off,
+        .scalars(0x2013...0x2013): .output("--"),
+        .scalars(0xE0000...0xE007F): .output(""),
+        .sequence([0x0020, 0x2014, 0x0020]): .output(" - "),
+        .scalars(0x00A9...0x00A9): .output("(c)"),
+    ])
+
     @Test("Long keys survive the alignment padding")
     func longKeysAreNotTruncated() throws {
-        // String.padding(toLength:) truncates; the range key is wider than the
-        // column and must still come back whole.
-        let text = RuleFile.encode(.builtIn)
+        // String.padding(toLength:) truncates; the range key is wider than
+        // the column and must still come back whole.
+        let text = RuleFile.encode(sample)
         #expect(text.contains("U+E0000..U+E007F"))
-        let parsed = try RuleFile.decode(text)
-        #expect(parsed.replacements.contains { $0.range == Replacements.tagCharacters })
+        #expect(try RuleFile.decode(text)[.scalars(Replacements.tagCharacters)] == .output(""))
     }
 
-    @Test("The generated file parses back to exactly the same table")
-    func roundTripsTheBuiltInTable() throws {
-        let text = RuleFile.encode(.builtIn)
-        let parsed = try RuleFile.decode(text)
-        #expect(parsed.replacements == RewriteRules.builtIn.replacements)
-        #expect(parsed.scalarCount == RewriteRules.builtIn.scalarCount)
+    @Test("The file parses back to exactly the changes it was written from")
+    func roundTripsChanges() throws {
+        #expect(try RuleFile.decode(RuleFile.encode(sample)) == sample)
     }
 
     @Test("Re-encoding what was parsed changes nothing")
     func encodingIsStable() throws {
-        let text = RuleFile.encode(.builtIn)
+        let text = RuleFile.encode(sample)
         #expect(RuleFile.encode(try RuleFile.decode(text)) == text)
     }
 
-    @Test("A round-tripped table still rewrites the same way")
+    @Test("A round-tripped set still rewrites the same way")
     func roundTripPreservesBehaviour() throws {
-        let parsed = try RuleFile.decode(RuleFile.encode(.builtIn))
-        let sample = Replacements.sampleText
-        #expect(TextNormalizer.normalize(sample, rules: parsed)
-                == TextNormalizer.normalize(sample, rules: .builtIn))
+        let parsed = try RuleFile.decode(RuleFile.encode(sample))
+        let text = Replacements.sampleText
+        #expect(TextNormalizer.normalize(text, rules: RewriteRules(overrides: parsed))
+                == TextNormalizer.normalize(text, rules: RewriteRules(overrides: sample)))
+    }
+
+    @Test("A file with nothing changed round-trips to nothing changed")
+    func roundTripsNoChanges() throws {
+        let text = RuleFile.encode(.none)
+        let parsed = try RuleFile.decode(text)
+        #expect(parsed.isEmpty)
+        #expect(RewriteRules(overrides: parsed).replacements == RewriteRules.builtIn.replacements)
+    }
+
+    @Test("Switching every character off writes a file that still parses")
+    func roundTripsEverythingOff() throws {
+        var everything = RuleOverrides()
+        for rule in Replacements.all { everything[rule.pattern] = .off }
+        let parsed = try RuleFile.decode(RuleFile.encode(everything))
+        #expect(RewriteRules(overrides: parsed).replacements.isEmpty)
+        // Nil, not an identical copy: with nothing switched on the clipboard
+        // is left alone rather than rewritten to itself.
+        #expect(TextNormalizer.normalize("\u{2014}\u{201C}", rules: RewriteRules(overrides: parsed)) == nil)
+    }
+
+    @Test("off is a keyword; \"off\" is the literal text")
+    func offKeywordVersusQuotedOff() throws {
+        #expect(try RuleFile.decode(document(#"  U+2014: off"#))[.scalars(0x2014...0x2014)] == .off)
+        #expect(try RuleFile.decode(document(#"  U+2014: "off""#))[.scalars(0x2014...0x2014)]
+                == .output("off"))
+    }
+
+    @Test("A document past the size limit is refused by the parser itself")
+    func refusesAnOversizedDocument() {
+        // RuleStore stats the file before reading it, but that guard cannot
+        // see a table arriving from anywhere else. Everything reaches a table
+        // through decode, so the ceiling lives here too.
+        let huge = String(repeating: "x", count: RuleFile.Limits.fileBytes + 1)
+        #expect(reason(huge) == .fileTooLarge(bytes: RuleFile.Limits.fileBytes + 1))
     }
 
     // MARK: - Reading
 
-    @Test("Reads a minimal file")
-    func minimal() throws {
-        let rules = try RuleFile.decode(document(#"  U+2014: "--"  # EM DASH"#))
-        #expect(rules.replacements.count == 1)
-        #expect(TextNormalizer.normalize("a\u{2014}b", rules: rules) == "a--b")
+    private func output(_ overrides: RuleOverrides, _ scalar: UInt32) -> String? {
+        guard case .output(let text) = overrides[.scalars(scalar...scalar)] else { return nil }
+        return text
     }
 
-    @Test("An empty rules section turns everything off")
+    @Test("Reads a minimal file")
+    func minimal() throws {
+        let overrides = try RuleFile.decode(document(#"  U+2014: "--"  # EM DASH"#))
+        #expect(overrides.count == 1)
+        #expect(TextNormalizer.normalize("a\u{2014}b", rules: RewriteRules(overrides: overrides))
+                == "a--b")
+    }
+
+    @Test("An empty rules section leaves every default in place")
     func emptyRules() throws {
-        let rules = try RuleFile.decode("version: 1\nrules:\n")
-        #expect(rules.replacements.isEmpty)
-        #expect(TextNormalizer.normalize(Replacements.sampleText, rules: rules) == nil)
+        // The file holds changes, so saying nothing is how you ask for the
+        // defaults — not how you turn everything off.
+        let overrides = try RuleFile.decode("version: 1\nrules:\n")
+        #expect(overrides.isEmpty)
+        #expect(RewriteRules(overrides: overrides).replacements == RewriteRules.builtIn.replacements)
     }
 
     @Test("Reads ranges")
     func ranges() throws {
-        let rules = try RuleFile.decode(document(#"  U+E0000..U+E007F: ""  # TAG"#))
-        #expect(TextNormalizer.normalize("a\u{E0041}b", rules: rules) == "ab")
+        // A range with no built-in rule, so the file is what puts it there.
+        let overrides = try RuleFile.decode(document(#"  U+2500..U+257F: ""  # BOX DRAWING"#))
+        #expect(overrides[.scalars(0x2500...0x257F)] == .output(""))
+        #expect(TextNormalizer.normalize("a\u{2502}b", rules: RewriteRules(overrides: overrides))
+                == "ab")
+    }
+
+    @Test("Switches a character off")
+    func readsOff() throws {
+        let overrides = try RuleFile.decode(document(#"  U+2014: off  # EM DASH"#))
+        #expect(overrides[.scalars(0x2014...0x2014)] == .off)
+        #expect(RewriteRules(overrides: overrides).rule(for: 0x2014) == nil)
     }
 
     @Test("Accepts the quoting styles a person would reach for", arguments: [
@@ -94,42 +152,43 @@ struct RuleFileTests {
         (#"  u+2014: "--""#, "--"),
     ])
     func quoting(_ line: String, _ expected: String) throws {
-        let rules = try RuleFile.decode(document(line))
-        #expect(rules.replacements.first?.output == expected)
+        #expect(output(try RuleFile.decode(document(line)), 0x2014) == expected)
     }
 
     @Test("A replacement containing a hash is not mistaken for a comment")
     func hashInValue() throws {
-        let rules = try RuleFile.decode(document(##"  U+2014: "#"  # EM DASH"##))
-        #expect(rules.replacements.first?.output == "#")
+        #expect(output(try RuleFile.decode(document(##"  U+2014: "#"  # EM DASH"##)), 0x2014) == "#")
     }
 
     @Test("Keeps the built-in name and family for a character it recognises")
     func recognisedCharacter() throws {
-        let rules = try RuleFile.decode(document(#"  U+2014: "-""#))
-        let rule = try #require(rules.replacements.first)
+        let overrides = try RuleFile.decode(document(#"  U+2014: "-""#))
+        let rule = try #require(RewriteRules(overrides: overrides).rule(for: 0x2014))
         #expect(rule.name == "EM DASH")
         #expect(rule.category == .dashes)
     }
 
     @Test("Puts an unrecognised character in the custom family")
     func customCharacter() throws {
-        let rules = try RuleFile.decode(document(#"  U+00A9: "(c)""#))
-        let rule = try #require(rules.replacements.first)
+        let overrides = try RuleFile.decode(document(#"  U+00A9: "(c)""#))
+        let rules = RewriteRules(overrides: overrides)
+        let rule = try #require(rules.rule(for: 0x00A9))
         #expect(rule.category == .custom)
         #expect(TextNormalizer.normalize("\u{a9} 2026", rules: rules) == "(c) 2026")
     }
 
-    @Test("Restores the built-in order regardless of how the file is sorted")
+    @Test("The built-in order survives however the file is sorted")
     func ordering() throws {
         let shuffled = document("""
               U+2192: "->"
               U+2014: "--"
               U+00AB: "\\""
             """)
-        let rules = try RuleFile.decode(shuffled)
-        // Guillemets and em dash come before arrows in the built-in table.
-        #expect(rules.replacements.map(\.pattern.firstScalar) == [0x00AB, 0x2014, 0x2192])
+        let rules = RewriteRules(overrides: try RuleFile.decode(shuffled))
+        // The table keeps built-in order regardless of how the file is
+        // written, so the Help window does not reshuffle.
+        #expect(rules.replacements.map(\.pattern.firstScalar)
+                == RewriteRules.builtIn.replacements.map(\.pattern.firstScalar))
     }
 
     // MARK: - Rejecting

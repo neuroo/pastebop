@@ -36,6 +36,37 @@ public enum Pattern: Sendable, Hashable {
     }
 }
 
+extension Pattern {
+
+    /// How the rules file writes this: `U+2014`, `U+E0000..U+E007F`, or a
+    /// substring's scalars separated by spaces.
+    public var fileKey: String {
+        switch self {
+        case .scalars(let range) where range.lowerBound == range.upperBound:
+            Self.hex(range.lowerBound)
+        case .scalars(let range):
+            "\(Self.hex(range.lowerBound))..\(Self.hex(range.upperBound))"
+        case .sequence(let scalars):
+            scalars.map(Self.hex).joined(separator: " ")
+        }
+    }
+
+    /// What to call a pattern the built-in table does not know. A readable
+    /// substring beats its code points.
+    public var displayName: String {
+        guard case .sequence(let scalars) = self else { return fileKey }
+        let text = String(String.UnicodeScalarView(scalars.compactMap(Unicode.Scalar.init)))
+        return text.allSatisfy { !$0.isWhitespace && $0.isASCII || !$0.isASCII }
+            ? "SEQUENCE \(text)"
+            : fileKey
+    }
+
+    private static func hex(_ value: UInt32) -> String {
+        let digits = String(value, radix: 16, uppercase: true)
+        return "U+" + (digits.count >= 4 ? digits : String(repeating: "0", count: 4 - digits.count) + digits)
+    }
+}
+
 /// One rewrite rule.
 public struct Replacement: Sendable, Hashable {
     public let pattern: Pattern
@@ -141,6 +172,16 @@ extension Replacement {
 public enum Replacements {
 
     /// Every rule, in table order.
+    /// The built-in rule for a pattern, where there is one. Names and
+    /// families come from here, so changing what a character becomes never
+    /// changes what it is called.
+    public static func builtIn(_ pattern: Pattern) -> Replacement? {
+        byPattern[pattern]
+    }
+
+    private static let byPattern: [Pattern: Replacement] =
+        Dictionary(all.map { ($0.pattern, $0) }, uniquingKeysWith: { first, _ in first })
+
     public static let all: [Replacement] =
         quotes + dashes + punctuation + spaces + invisibles + bullets + symbols
 

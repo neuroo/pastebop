@@ -10,7 +10,9 @@ import Testing
 struct SequenceRuleTests {
 
     private func rules(_ body: String) throws -> RewriteRules {
-        try RuleFile.decode("version: 1\nrules:\n" + body)
+        // defaults: [] so the table is exactly what the test declared,
+        // rather than the built-in table with it laid over the top.
+        RewriteRules(overrides: try RuleFile.decode("version: 1\nrules:\n" + body), defaults: [])
     }
 
     // MARK: - Matching
@@ -120,12 +122,15 @@ struct SequenceRuleTests {
 
     @Test("Substrings survive a round trip through the file")
     func roundTrip() throws {
-        let table = try rules("""
+        let body = """
               U+0020 U+2014 U+0020: " - "
               U+200B U+200B: ""
-            """)
-        let reparsed = try RuleFile.decode(RuleFile.encode(table))
-        #expect(reparsed.replacements == table.replacements)
+            """
+        let overrides = try RuleFile.decode("version: 1\nrules:\n" + body)
+        let reparsed = try RuleFile.decode(RuleFile.encode(overrides))
+        #expect(reparsed == overrides)
+        #expect(RewriteRules(overrides: reparsed, defaults: []).replacements
+                == (try rules(body)).replacements)
     }
 
     @Test("Rejects a range inside a substring")

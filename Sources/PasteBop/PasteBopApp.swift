@@ -39,6 +39,17 @@ struct PasteBopApp: App {
         }
         .menuBarExtraStyle(.menu)
 
+        Window("PasteBop Rules", id: RulesWindow.id) {
+            RulesView(model: delegate.model)
+        }
+        // Unlike About, this is a list someone reads down: contentMinSize
+        // keeps the layout's size as a floor and lets it grow from there.
+        .windowResizability(.contentMinSize)
+        .defaultSize(width: 720, height: 580)
+        .windowStyle(.hiddenTitleBar)
+        .defaultPosition(.center)
+        .commandsRemoved()
+
         Window("About PasteBop", id: AboutWindow.id) {
             AboutView(model: delegate.model)
         }
@@ -68,6 +79,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.servicesProvider = service
         NSUpdateDynamicServices()
     }
+
+    /// Quitting does not have to close the rules window first, so a switch
+    /// flipped inside the debounce would otherwise never reach the file.
+    func applicationWillTerminate(_ notification: Notification) {
+        model.rulesEditor.flush()
+    }
 }
 
 enum AboutWindow {
@@ -75,6 +92,16 @@ enum AboutWindow {
 
     /// Without the activation the window opens behind whatever the user was
     /// working in.
+    @MainActor
+    static func show(using openWindow: OpenWindowAction) {
+        NSApp.activate()
+        openWindow(id: id)
+    }
+}
+
+enum RulesWindow {
+    static let id = "rules"
+
     @MainActor
     static func show(using openWindow: OpenWindowAction) {
         NSApp.activate()

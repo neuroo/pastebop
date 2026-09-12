@@ -40,11 +40,16 @@ These are what the tests actually protect. Breaking one is a silent
 correctness bug, not a style issue.
 
 - **`Replacements.all` is the single source of truth** for the *defaults*. The
-  table shipped in the binary, the file written on first launch and the README
-  table all come from it. Never add a lookup that reads anything else.
-- **At runtime the rules come from the file, not from `Replacements.all`.**
-  Everything that rewrites or describes text takes a `RewriteRules`. Reaching
-  for the built-in table in app code would silently ignore the user's edits.
+  table shipped in the binary, the README table and every character nobody has
+  an opinion about come from it. Never add a lookup that reads anything else.
+- **The file holds what someone changed, not the table.** `RewriteRules` is
+  the defaults with a `RuleOverrides` laid over them, so a character no entry
+  mentions keeps its built-in rule — which is how a new version's additions
+  reach a Mac that already has a file.
+- **At runtime the rules come from that combination, never from
+  `Replacements.all` alone.** Everything that rewrites or describes text takes
+  a `RewriteRules`. Reaching for the built-in table in app code would silently
+  ignore the user's changes.
 - **A bad rules file must never stop PasteBop working.** Parsing keeps the last
   rules that worked and surfaces the line number; it does not fall back to the
   defaults, because that would silently undo someone's edits mid-keystroke.
@@ -88,6 +93,13 @@ anything AppKit does not model stay byte-identical. Only RTFD goes through
 | --- | --- |
 | `UserDefaults` | settings and statistics: enabled, copy count, tally, counting-since |
 | `~/Library/Application Support/PasteBop/rules.yaml` | the rewrite table, user editable, watched for changes |
+
+Under the App Sandbox all of this moves inside the container
+(`~/Library/Containers/info.neuroo.PasteBop/Data/…`), `UserDefaults`
+included. **Nothing migrates it**, and a sandboxed build cannot read the old
+location, so a store build needs a one-time import — an `NSOpenPanel` at the
+old path, since the user picking the file is what grants access. Not built
+yet; it belongs with the sandbox work, not after it.
 
 Settings belong in `UserDefaults`. Application Support is for state a user
 might reasonably open, edit or delete by hand, so it is readable JSON with
@@ -218,12 +230,111 @@ YAML library, since the schema is a flat mapping and a dependency would be the
 only third-party code here. The cost is that valid-but-unsupported YAML is
 rejected, so **every rejection must name the line and say what was expected**.
 
-`RuleFile.encode` is hand-written for the same reason a serialiser will not do:
-the grouping and the per-character comments are the point. A file of 258 bare
-mappings would be accurate and unusable.
+**The file holds changes, not the table.** `decode` returns a `RuleOverrides`
+and `RewriteRules` lays it over `Replacements.all`. An entry is `off` to leave
+a character alone, or a quoted replacement — which overrides a default or adds
+a character that had none. `off` is the only unquoted value, so `"off"` is
+still the literal text.
 
-Round-tripping is tested: encode, decode, and the result must equal the table
-you started with; re-encoding must be byte-stable.
+Saying nothing is how you ask for the defaults, not how you turn everything
+off. That inversion is the whole reason a new version's characters reach a Mac
+that already has a file.
+
+`RuleFile.encode` is hand-written because the per-character comments are the
+point; a bare mapping of code points is accurate and unreadable. It aligns on
+single-scalar keys and lets the rare range or substring key overflow, rather
+than pushing every colon out to match the longest.
+
+Round-tripping is tested: encode, decode, and the result must equal the
+changes you started with; re-encoding must be byte-stable.
+
+## The rules window
+
+The window edits a `RuleSelection` and writes the file through the same path
+as Restore Default Rules: write, reload, rebuild the watch.
+
+Switching a rule off *removes* it, so the set on offer is fixed when editing
+starts — everything in force, plus any default the file no longer carries, or
+a family someone deleted by hand could never be switched back on. **The
+in-force version of a rule wins over the built-in one**, so switching a
+customised rule off and on again gives back their replacement, not the
+default; restoring from `Replacements.all` would lose the edit silently. Any
+subset of a valid table is valid, so the window cannot write a file the parser
+would refuse — including the empty one, which leaves the clipboard untouched
+rather than rewriting it to itself.
+
+Writes are debounced, and the window reloads on any change to
+`RuleStore.revision` — a hand edit picked up by the watcher, or a table
+arriving from iCloud. Without that, the next switch would put a stale table
+over whatever had landed.
+
+## iCloud
+
+The changes are settings, not a document, and there are usually a handful.
+They sync through `NSUbiquitousKeyValueStore` — no file coordination, no
+download states, no conflict versions, none of which the `O_EVTONLY` watcher
+would survive.
+
+**One key per changed character.** That is what makes iCloud keep both when
+two Macs change different ones; a single blob would let last-writer-wins throw
+one away before the other Mac ever saw it. The value is the same line the file
+would hold, so what comes back is read by the same parser — and a line this
+build cannot read is skipped rather than allowed to discard everything beside
+it.
+
+**The local file stays the source of truth.** A change arriving from iCloud is
+written to it, so it reaches the rules through the same parse and the same
+error reporting as an edit made by hand.
+
+`RuleSync.merge` is a three-way merge against a **base**: the changes as they
+stood when this Mac last agreed with iCloud, kept in `UserDefaults`. Without
+it an entry missing here cannot be told apart from one this Mac has never
+seen, and a newly signed-in Mac would erase everyone's changes. A character
+only one side touched takes that side's answer; one both sides touched takes
+this Mac's, so the machine someone is sitting at is never overruled. A missing
+entry is a value like any other, which is how switching a character back on
+travels instead of being put back by the other Mac.
+
+The store holds 1024 keys, so a set past `maxSyncedEntries` stays local and
+says so rather than syncing half of itself.
+
+`RuleStore.revision` is still load-bearing: the window writes the *whole* set
+of changes, so a window showing a stale set would revert whatever arrived
+while it was open. It reloads when the revision moves.
+
+**Off in every default build, and it has to be.** The container belongs to
+this project's team, so a build signed with anyone else's certificate — or
+ad-hoc, which is what building from source gives you — has no profile
+granting it. Shipping it on by default would hand contributors a broken app
+rather than a feature.
+
+Two gates, so neither alone can go wrong:
+
+- `PASTEBOP_ICLOUD` compiles it in. Unset everywhere except
+  `PASTEBOP_ICLOUD=1 Scripts/build-app.sh`; without it the code is not in the
+  binary at all and `standard(store:)` returns `NoCloud`.
+- The entitlement makes the store usable. Even with the flag, the app checks
+  for `com.apple.developer.ubiquity-kvstore-identifier` at runtime and falls
+  back to `NoCloud`. Reaching `NSUbiquitousKeyValueStore` without the
+  entitlement is not reliably a no-op.
+
+Turning it on needs an App ID with iCloud key-value storage, a provisioning
+profile granting the container, and the entitlement. All three exist for this
+project, and the path has been run end to end: a change published, then the
+local file *and* the recorded base deleted, and the change came back from
+iCloud on relaunch.
+
+```bash
+PASTEBOP_ICLOUD=1 PASTEBOP_PROFILE=<profile> CODESIGN_IDENTITY=<identity> Scripts/build-app.sh
+```
+
+`Scripts/find-profile.sh` locates the profile when `PASTEBOP_PROFILE` is not
+set. The build refuses ad-hoc signing, a missing profile, a profile for
+another bundle or one that does not grant the container, and finally checks
+the entitlement survived into the signature — an entitlement that silently
+fails to land produces an app that launches and never syncs.
+
+Key-value storage **is** available to Developer ID builds, not App Store only.
 
 ## Dependencies
 

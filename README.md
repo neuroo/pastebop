@@ -117,29 +117,38 @@ someone who likes em dashes.
 
 ## Customising the rules
 
-Every rule lives in a file you can edit:
+**Rules ▸ Edit Rules…** opens a window listing every character PasteBop
+rewrites, with a switch beside it. Turn off a whole family — or one character
+— and the rest carry on. Changes take effect on the next copy.
+
+Behind the window is a file, which is where you change *what* a character
+becomes rather than whether it is touched at all:
 
 ```
 ~/Library/Application Support/PasteBop/rules.yaml
 ```
 
 It is written with the built-in table on first launch, grouped and commented,
-and **saving it applies immediately** — no restart. **Rules ▸ Edit Rules…**
-in the menu opens it.
+and **saving it applies immediately** — no restart. **Rules ▸ Open rules.yaml**
+opens it.
 
 ```yaml
 version: 1
 
 rules:
-  # Dashes and hyphens
-  U+2013: "-"       # –  EN DASH
-  U+2014: "--"      # —  EM DASH
-  U+E0000..U+E007F: ""   # TAG CHARACTERS
+  U+2014: off       # —  EM DASH  (left alone)
+  U+2013: "--"      # –  EN DASH  (changed)
+  U+00A9: "(c)"     # ©  COPYRIGHT SIGN  (added)
 ```
 
-The file *is* the table: delete a line and that character is left alone, add
-one and it starts being rewritten. Replacements must be quoted, and `""`
-deletes the match. A key is one of:
+The file holds **what you changed**, not the whole table. A character you do
+not mention keeps PasteBop's default, so a new version can add characters
+without your file standing in the way — and deleting a line puts that
+character back to its default.
+
+`off` leaves a character alone. Anything else is the replacement, which must
+be quoted; `""` deletes the match and `"off"` is the literal text. A key is
+one of:
 
 | Key | Matches |
 | --- | --- |

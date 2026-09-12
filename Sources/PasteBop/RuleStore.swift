@@ -23,18 +23,39 @@ final class RuleStore {
 
     private(set) var rules: RewriteRules = .builtIn
 
+    /// What the file actually holds: the changes, not the table. The window
+    /// edits these, and each one travels on its own.
+    private(set) var overrides: RuleOverrides = .none
+
+    /// Bumped whenever a readable table lands, from any route: a hand edit,
+    /// the rules window, or a copy arriving from iCloud. Anything holding a
+    /// table derived from this one can tell that the file moved underneath
+    /// it.
+    private(set) var revision = 0
+
     /// Set when the file could not be read. The last working rules stay in
     /// force, so a typo mid-edit does not stop PasteBop working.
     private(set) var failure: String?
 
+    /// The failure as a sentence. Both the rules window and the About panel
+    /// show it, and they must not word the same problem differently.
+    var failureMessage: String? {
+        failure.map { "Rules file: \($0) Still using the last rules that worked." }
+    }
+
     var isCustomised: Bool {
-        rules.replacements != RewriteRules.builtIn.replacements
+        !overrides.isEmpty
     }
 
     let fileURL: URL?
 
     /// So the clipboard monitor can pick up a new set.
     var onChange: ((RewriteRules) -> Void)?
+
+    /// Handed the changes whenever a readable file lands on disk, so a
+    /// mirror can follow it. Never called for a file that failed to parse:
+    /// nothing should propagate something the parser refused.
+    var onOverridesChanged: ((RuleOverrides) -> Void)?
 
     @ObservationIgnored private var watcher: DispatchSourceFileSystemObject?
     @ObservationIgnored private var pendingReload: Task<Void, Never>?
@@ -55,7 +76,17 @@ final class RuleStore {
     }
 
     func restoreDefaults() {
-        write(RuleFile.encode(.builtIn))
+        save(.none)
+    }
+
+    /// Writes the changes the rules window made, and picks them up again the
+    /// same way an edit made by hand is picked up.
+    func save(_ overrides: RuleOverrides) {
+        save(RuleFile.encode(overrides))
+    }
+
+    private func save(_ text: String) {
+        write(text)
         load()
         // The file has a new inode, so the old watch is stale.
         watch()
@@ -77,7 +108,7 @@ final class RuleStore {
         // Deleting the file asks for the defaults back; this also writes it
         // on a first launch.
         if !FileManager.default.fileExists(atPath: fileURL.path) {
-            write(RuleFile.encode(.builtIn))
+            write(RuleFile.encode(.none))
         }
         do {
             let size = try FileManager.default.attributesOfItem(atPath: fileURL.path)[.size] as? Int ?? 0
@@ -88,9 +119,12 @@ final class RuleStore {
             }
             let text = try String(contentsOf: fileURL, encoding: .utf8)
             let parsed = try RuleFile.decode(text)
-            rules = parsed
+            overrides = parsed
+            rules = RewriteRules(overrides: parsed)
+            revision &+= 1
             failure = nil
-            onChange?(parsed)
+            onChange?(rules)
+            onOverridesChanged?(parsed)
         } catch let error as RuleFile.ParseError {
             // Keep the last rules that worked: editing the file must not stop
             // the clipboard being fixed mid-keystroke.

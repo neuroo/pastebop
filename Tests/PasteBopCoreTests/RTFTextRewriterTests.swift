@@ -15,7 +15,9 @@ struct RTFTextRewriterTests {
     }
 
     private func rules(_ body: String) throws -> RewriteRules {
-        try RuleFile.decode("version: 1\nrules:\n" + body)
+        // defaults: [] so the table is exactly what the test declared,
+        // rather than the built-in table with it laid over the top.
+        RewriteRules(overrides: try RuleFile.decode("version: 1\nrules:\n" + body), defaults: [])
     }
 
     /// What a reader makes of it, which is what the user pastes.

@@ -79,6 +79,8 @@ final class AppModel {
     // MARK: - Wiring
 
     let ruleStore: RuleStore
+    let rulesEditor: RulesEditor
+    let cloudMirror: RuleCloudMirror
 
     var rules: RewriteRules { ruleStore.rules }
 
@@ -96,6 +98,8 @@ final class AppModel {
     init(defaults: UserDefaults = .standard, ruleStore: RuleStore = RuleStore()) {
         self.defaults = defaults
         self.ruleStore = ruleStore
+        self.rulesEditor = RulesEditor(store: ruleStore)
+        self.cloudMirror = .standard(store: ruleStore)
         defaults.register(defaults: [Key.isEnabled: true])
         self.isEnabled = defaults.bool(forKey: Key.isEnabled)
         self.copyCount = defaults.integer(forKey: Key.copyCount)
@@ -122,6 +126,8 @@ final class AppModel {
             self?.monitor?.rules = rules
         }
         ruleStore.start()
+        // After the first load, so the mirror compares a table that parsed.
+        cloudMirror.start()
 
         monitor = ClipboardMonitor(rules: rules) { [weak self] outcome in
             self?.record(outcome)

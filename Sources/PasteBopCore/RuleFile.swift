@@ -5,15 +5,18 @@
 
 import Foundation
 
-/// Reads and writes the user-editable rules file. The file *is* the table:
-/// delete a line and that character is left alone, add one and it is not.
+/// Reads and writes the user-editable rules file. The file holds *what
+/// someone changed*, not the table: a character nobody mentions keeps its
+/// built-in rule, which is how a new version's additions reach a Mac that
+/// already has a file.
 ///
 /// ```yaml
 /// version: 1
 ///
 /// rules:
-///   U+2014: "--"            # EM DASH
-///   U+E0000..U+E007F: ""    # TAG CHARACTERS
+///   U+2014: off     # leave this character alone
+///   U+2013: "--"    # rewrite it to this instead
+///   U+00A9: "(c)"   # a character with no built-in rule
 /// ```
 ///
 /// A small subset of YAML, parsed here rather than by a library, because the
@@ -37,18 +40,21 @@ public enum RuleFile {
 
     // MARK: - Reading
 
-    /// Names and families come from the built-in table where the pattern is
-    /// recognised; anything new lands in the custom family.
-    public static func decode(_ document: String) throws -> RewriteRules {
+    /// Names and families are not stored: they come from the built-in table
+    /// when `RewriteRules` applies these.
+    public static func decode(_ document: String) throws -> RuleOverrides {
+        // The same ceiling RuleStore applies before it reads the file, here
+        // too: every route to a table — the file, a copy arriving from
+        // iCloud, the fuzzer — is held to one definition of acceptable.
+        let bytes = document.utf8.count
+        guard bytes <= Limits.fileBytes else {
+            throw ParseError(line: 1, reason: .fileTooLarge(bytes: bytes))
+        }
+
         var version: Int?
         var inRulesSection = false
-        var parsed: [Replacement] = []
+        var overrides = RuleOverrides()
         var firstSeen: [Pattern: Int] = [:]
-
-        let known = Dictionary(
-            Replacements.all.map { ($0.pattern, $0) },
-            uniquingKeysWith: { first, _ in first }
-        )
 
         for (offset, rawLine) in document.components(separatedBy: .newlines).enumerated() {
             let number = offset + 1
@@ -71,7 +77,7 @@ public enum RuleFile {
                 throw ParseError(line: number, reason: .ruleOutsideRulesSection)
             }
 
-            guard parsed.count < Limits.rules else {
+            guard overrides.count < Limits.rules else {
                 throw ParseError(line: number, reason: .tooManyRules)
             }
             let (key, rest) = try split(line, on: number)
@@ -81,21 +87,33 @@ public enum RuleFile {
             }
             firstSeen[pattern] = number
 
-            let output = try parseValue(rest, on: number)
-            guard output.unicodeScalars.count <= Limits.replacementScalars else {
-                throw ParseError(line: number, reason: .replacementTooLong)
+            let change = try parseChange(rest, on: number)
+            if case .output(let output) = change {
+                guard output.unicodeScalars.count <= Limits.replacementScalars else {
+                    throw ParseError(line: number, reason: .replacementTooLong)
+                }
             }
-            let template = known[pattern]
-            parsed.append(Replacement(
-                pattern: pattern,
-                output: output,
-                name: template?.name ?? defaultName(for: pattern, key: key),
-                category: template?.category ?? .custom
-            ))
+            overrides[pattern] = change
         }
 
         guard version != nil else { throw ParseError(line: 1, reason: .missingVersion) }
-        return RewriteRules(ordered(parsed))
+        return overrides
+    }
+
+    /// `off` is the one value that is not quoted. Quotes stay required for a
+    /// replacement, or `--  # em dash` would be ambiguous and a replacement
+    /// of `#` impossible — and `"off"` still means the literal text.
+    static func parseChange(_ text: String, on number: Int) throws -> RuleOverrides.Change {
+        let keyword = "off"
+        if text.lowercased() == keyword || text.lowercased().hasPrefix(keyword + " ")
+            || text.lowercased().hasPrefix(keyword + "\t") {
+            let trailing = String(text.dropFirst(keyword.count)).trimmingCharacters(in: .whitespaces)
+            guard trailing.isEmpty || trailing.hasPrefix("#") else {
+                throw ParseError(line: number, reason: .trailingText(trailing))
+            }
+            return .off
+        }
+        return .output(try parseValue(text, on: number))
     }
 
     private enum TopLevel {
@@ -119,29 +137,6 @@ public enum RuleFile {
         default:
             throw ParseError(line: number, reason: .unknownKey(key))
         }
-    }
-
-    /// Built-in order, new rules last, so the Help window does not reshuffle
-    /// because someone sorted their file.
-    private static func ordered(_ parsed: [Replacement]) -> [Replacement] {
-        let position = Dictionary(
-            Replacements.all.enumerated().map { ($1.pattern, $0) },
-            uniquingKeysWith: { first, _ in first }
-        )
-        return parsed.sorted {
-            (position[$0.pattern] ?? .max, $0.pattern.firstScalar, $0.scalarCount)
-                < (position[$1.pattern] ?? .max, $1.pattern.firstScalar, $1.scalarCount)
-        }
-    }
-
-    /// For a rule the built-in table does not know. A readable substring
-    /// beats its code points.
-    private static func defaultName(for pattern: Pattern, key: String) -> String {
-        guard case .sequence(let scalars) = pattern else { return key }
-        let text = String(String.UnicodeScalarView(scalars.compactMap(Unicode.Scalar.init)))
-        return text.allSatisfy { !$0.isWhitespace && $0.isASCII || !$0.isASCII }
-            ? "SEQUENCE \(text)"
-            : key
     }
 
     private static func isBlankOrComment(_ line: String) -> Bool {
@@ -317,23 +312,25 @@ public enum RuleFile {
 
 extension RuleFile {
 
-    /// Grouped by family, aligned, and commented with each character's name.
-    /// Written by hand because the comments and grouping are the point; a
-    /// serialiser would emit 258 bare mappings.
-    public static func encode(_ rules: RewriteRules) -> String {
+    /// Aligned, and commented with each character's name. Written by hand
+    /// because the comments are the point: a bare mapping of code points is
+    /// accurate and unreadable.
+    public static func encode(_ overrides: RuleOverrides) -> String {
         var lines = header
+        let entries = overrides.sorted
 
-        // Aligned on single-scalar keys; the rare range key overflows.
-        let width = rules.replacements.lazy
-            .filter { !$0.isRange }
-            .map { key(for: $0).count }
-            .max() ?? 0
-
-        for category in rules.families {
-            lines.append("")
-            lines.append("  # \(category.rawValue)")
-            for rule in rules.rules(in: category) {
-                lines.append(line(for: rule, keyWidth: width))
+        if entries.isEmpty {
+            lines.append("  # Nothing changed \u{2014} every character uses its default.")
+        } else {
+            // Aligned on single-scalar keys; the rare range or substring
+            // key overflows rather than pushing every colon out.
+            let width = entries.compactMap { entry -> Int? in
+                guard case .scalars(let range) = entry.pattern,
+                      range.lowerBound == range.upperBound else { return nil }
+                return entry.pattern.fileKey.count
+            }.max() ?? 0
+            for entry in entries {
+                lines.append(line(for: entry, keyWidth: width))
             }
         }
 
@@ -345,9 +342,14 @@ extension RuleFile {
         [
             "# PasteBop rules",
             "#",
-            "# Every character PasteBop rewrites is listed below, and this file is the",
-            "# whole table: delete a line and that character is left alone, add a line",
-            "# and it starts being rewritten. Saving applies the change immediately.",
+            "# Only what you have changed. Every other character uses PasteBop's",
+            "# defaults, so a new version can add characters without this file",
+            "# standing in the way. Saving applies the change immediately.",
+            "#",
+            "#   U+2014: off     leave this character alone",
+            "#   U+2014: \"--\"    rewrite it to this instead",
+            "#",
+            "# Delete a line to go back to the default for that character.",
             "#",
             "# Keys are Unicode scalars written U+XXXX, or a range U+XXXX..U+YYYY.",
             "# Replacements must be quoted; \"\" deletes the character.",
@@ -365,26 +367,31 @@ extension RuleFile {
         ]
     }
 
-    private static func line(for rule: Replacement, keyWidth: Int) -> String {
+    /// A minimal document around a set of entry lines: what the key-value
+    /// store and the last-synced record hold, without the file's header.
+    public static func document(_ lines: [String]) -> String {
+        (["version: \(currentVersion)", "rules:"] + lines.map { "  " + $0 })
+            .joined(separator: "\n")
+    }
+
+    /// One entry on its own, unpadded: what travels in the key-value store,
+    /// so a copy arriving from iCloud is read by the same parser as the file.
+    public static func line(for pattern: Pattern, _ change: RuleOverrides.Change) -> String {
+        line(for: (pattern: pattern, change: change), keyWidth: 0)
+            .trimmingCharacters(in: .whitespaces)
+    }
+
+    private static func line(
+        for entry: (pattern: Pattern, change: RuleOverrides.Change),
+        keyWidth: Int
+    ) -> String {
         // Not String.padding(toLength:), which truncates.
-        let key = key(for: rule).rightPadded(to: keyWidth)
-        let value = quote(rule.output).rightPadded(to: 8)
-        return "  \(key): \(value)  # \(comment(for: rule))"
-    }
-
-    private static func key(for rule: Replacement) -> String {
-        switch rule.pattern {
-        case .scalars(let range) where range.lowerBound == range.upperBound:
-            hex(range.lowerBound)
-        case .scalars(let range):
-            "\(hex(range.lowerBound))..\(hex(range.upperBound))"
-        case .sequence(let scalars):
-            scalars.map(hex).joined(separator: " ")
+        let key = entry.pattern.fileKey.rightPadded(to: keyWidth)
+        let value = switch entry.change {
+        case .off: "off"
+        case .output(let output): quote(output)
         }
-    }
-
-    private static func hex(_ value: UInt32) -> String {
-        "U+" + String(value, radix: 16, uppercase: true).leftPadded(to: 4, with: "0")
+        return "  \(key): \(value.rightPadded(to: 8))  # \(comment(for: entry.pattern))"
     }
 
     private static func quote(_ output: String) -> String {
@@ -401,20 +408,26 @@ extension RuleFile {
         return "\"\(escaped)\""
     }
 
-    private static func comment(for rule: Replacement) -> String {
-        guard rule.category.hasVisibleGlyphs else { return rule.name }
-        if let scalar = rule.scalar { return "\(scalar)  \(rule.name)" }
-        if let text = rule.sequenceText, !text.isEmpty { return "\(text)  \(rule.name)" }
-        return rule.name
+    /// The name comes from the built-in table where there is one, so
+    /// changing what a character becomes never changes what it is called.
+    private static func comment(for pattern: Pattern) -> String {
+        let known = Replacements.builtIn(pattern)
+        let name = known?.name ?? pattern.displayName
+        guard known?.category.hasVisibleGlyphs ?? true else { return name }
+        if case .scalars(let range) = pattern, range.lowerBound == range.upperBound,
+           let scalar = Unicode.Scalar(range.lowerBound) {
+            return "\(scalar)  \(name)"
+        }
+        if case .sequence(let scalars) = pattern {
+            let text = String(String.UnicodeScalarView(scalars.compactMap(Unicode.Scalar.init)))
+            if !text.isEmpty { return "\(text)  \(name)" }
+        }
+        return name
     }
 }
 
-/// Neither truncates. Alignment is cosmetic; losing characters is not.
+/// Does not truncate. Alignment is cosmetic; losing characters is not.
 private extension String {
-    func leftPadded(to width: Int, with pad: Character) -> String {
-        count >= width ? self : String(repeating: pad, count: width - count) + self
-    }
-
     func rightPadded(to width: Int) -> String {
         count >= width ? self : self + String(repeating: " ", count: width - count)
     }

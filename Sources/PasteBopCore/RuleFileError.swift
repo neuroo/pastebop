@@ -25,6 +25,7 @@ extension RuleFile {
             case rangeInSequence(String)
             case asciiScalar(String)
             case tooManyRules
+            case fileTooLarge(bytes: Int)
             case sequenceTooLong(String)
             case replacementTooLong
             case duplicate(String, firstSeenOnLine: Int)
@@ -65,6 +66,8 @@ extension RuleFile {
             case .asciiScalar(let key):
                 "\"\(key)\" is below U+00A0. PasteBop never rewrites an ASCII character "
                     + "on its own; use a substring."
+            case .fileTooLarge(let bytes):
+                "the rules file is \(bytes / 1024) KB; the limit is \(RuleFile.Limits.fileBytes / 1024) KB."
             case .tooManyRules:
                 "too many rules; the limit is \(Limits.rules)."
             case .sequenceTooLong(let key):

@@ -47,7 +47,9 @@ struct MenuContent: View {
         Divider()
 
         Menu("Rules") {
-            Button("Edit Rules\u{2026}") { model.ruleStore.edit() }
+            Button("Edit Rules\u{2026}") { RulesWindow.show(using: openWindow) }
+            Divider()
+            Button("Open rules.yaml") { model.ruleStore.edit() }
             Button("Reveal in Finder") { model.ruleStore.revealInFinder() }
             Divider()
             Button("Restore Default Rules") { model.ruleStore.restoreDefaults() }
