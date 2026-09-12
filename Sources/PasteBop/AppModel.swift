@@ -80,7 +80,7 @@ final class AppModel {
 
     let ruleStore: RuleStore
     let rulesEditor: RulesEditor
-    let cloudMirror: RuleCloudMirror
+    let cloudMirror: RuleCloudMirror?
 
     var rules: RewriteRules { ruleStore.rules }
 
@@ -127,7 +127,7 @@ final class AppModel {
         }
         ruleStore.start()
         // After the first load, so the mirror compares a table that parsed.
-        cloudMirror.start()
+        cloudMirror?.start()
 
         monitor = ClipboardMonitor(rules: rules) { [weak self] outcome in
             self?.record(outcome)

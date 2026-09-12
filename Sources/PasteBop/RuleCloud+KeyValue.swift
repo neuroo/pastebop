@@ -77,13 +77,16 @@ final class KeyValueCloud: RuleCloud {
 #endif
 
 extension RuleCloudMirror {
-    /// Off unless the build was both compiled and signed for it.
-    static func standard(store: RuleStore) -> RuleCloudMirror {
+    /// Nil unless the build was both compiled and signed for iCloud. There is
+    /// deliberately no do-nothing stand-in: a mirror needs a cloud that gives
+    /// back what it was given, and one that does not would read as the other
+    /// side having deleted everything.
+    static func standard(store: RuleStore) -> RuleCloudMirror? {
         #if PASTEBOP_ICLOUD
-        let cloud: any RuleCloud = hasKeyValueEntitlement() ? KeyValueCloud() : NoCloud()
-        return RuleCloudMirror(store: store, cloud: cloud)
+        guard hasKeyValueEntitlement() else { return nil }
+        return RuleCloudMirror(store: store, cloud: KeyValueCloud())
         #else
-        return RuleCloudMirror(store: store, cloud: NoCloud())
+        return nil
         #endif
     }
 }

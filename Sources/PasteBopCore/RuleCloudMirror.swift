@@ -24,6 +24,11 @@ public protocol RuleStoring: AnyObject {
 
 /// Keeps the rules file in step with the same user's other Macs.
 ///
+/// Only exists when there is somewhere to mirror to. A stand-in cloud that
+/// accepts `publish` and reports nothing back would be read as the other
+/// side having deleted everything, and the merge would faithfully propagate
+/// that to the file.
+///
 /// The local file stays the source of truth: a change arriving from iCloud is
 /// *written to it*, so it reaches the rules through the same parse and the
 /// same error reporting as an edit made by hand.
@@ -84,14 +89,4 @@ public final class RuleCloudMirror {
         guard let text = defaults.string(forKey: Key.base) else { return .none }
         return (try? RuleFile.decode(text)) ?? .none
     }
-}
-
-/// What a build without the iCloud entitlement gets. Reaching
-/// `NSUbiquitousKeyValueStore` without one is not reliably a no-op, so it is
-/// not reached at all.
-public struct NoCloud: RuleCloud {
-    public init() {}
-    public var remote: RuleOverrides { .none }
-    public func publish(_ overrides: RuleOverrides) {}
-    public func start(onChange: @escaping @MainActor @Sendable () -> Void) {}
 }

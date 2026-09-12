@@ -163,6 +163,28 @@ struct RuleCloudMirrorTests {
         #expect(try #require(mirror.failure).contains("\(RuleSync.maxSyncedEntries)"))
     }
 
+    @Test("A second local change does not delete the first")
+    func successiveLocalChangesAccumulate() throws {
+        // What a cloud that accepted publishes and reported nothing back
+        // caused: after the first change is recorded as the base, the second
+        // reconcile reads the empty remote as "the other side deleted that"
+        // and propagates it. The file lost the earlier change.
+        let store = FakeStore()
+        let cloud = FakeCloud()
+        let mirror = RuleCloudMirror(store: store, cloud: cloud, defaults: try scratchDefaults())
+        mirror.start()
+
+        store.overrides = RuleOverrides([emDash: .off])
+        cloud.arrive(cloud.remote)
+        #expect(store.overrides[emDash] == .off)
+
+        store.overrides = RuleOverrides([emDash: .off, ellipsis: .off])
+        cloud.arrive(cloud.remote)
+        #expect(store.overrides[emDash] == .off)
+        #expect(store.overrides[ellipsis] == .off)
+        #expect(cloud.remote == RuleOverrides([emDash: .off, ellipsis: .off]))
+    }
+
     @Test("Nothing anywhere is nothing done")
     func quietWhenEverythingAgrees() throws {
         let store = FakeStore()

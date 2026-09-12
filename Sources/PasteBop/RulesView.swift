@@ -33,7 +33,7 @@ struct RulesView: View {
                 Divider()
                 warning(failure)
             }
-            if let failure = model.cloudMirror.failure {
+            if let failure = model.cloudMirror?.failure {
                 Divider()
                 warning(failure)
             }
