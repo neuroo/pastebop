@@ -4,7 +4,6 @@
 //
 
 import AppKit
-import Foundation
 import PasteBopCore
 
 /// Watches `NSPasteboard` and rewrites it when the contents change. AppKit
